@@ -1,0 +1,10 @@
+# Editor backup files
+*.bak
+*~
+
+# Log files (if we ever add local logging)
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
