@@ -51,22 +51,22 @@ echo ""
 
 # ─── Trin 1: Reparér pakke-afhængigheder ─────────────────────────────────────
 echo -e "${BOLD}[1/6] Reparerer pakke-afhængigheder...${NC}"
-apt --fix-broken install -y || {
+apt-get --fix-broken install -y || {
     echo -e "${RED}✗ fix-broken fejlede. Afslutter.${NC}"; ((ERRORS++)); exit 1
 }
 echo -e "${GREEN}✓ Færdig${NC}"; echo ""
 
 # ─── Trin 2: Opdatér pakkelister ─────────────────────────────────────────────
 echo -e "${BOLD}[2/6] Opdaterer pakkelister...${NC}"
-apt update || {
-    echo -e "${RED}✗ apt update fejlede. Afslutter.${NC}"; exit 1
+apt-get update || {
+    echo -e "${RED}✗ apt-get update fejlede. Afslutter.${NC}"; exit 1
 }
 echo -e "${GREEN}✓ Pakkelister opdateret${NC}"; echo ""
 
 # ─── Trin 3: Fuld systemopgradering ──────────────────────────────────────────
 echo -e "${BOLD}[3/6] Fuld systemopgradering...${NC}"
 UPGRADE_TMP=$(mktemp)
-apt full-upgrade -y | tee "$UPGRADE_TMP"
+apt-get full-upgrade -y | tee "$UPGRADE_TMP"
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     echo -e "${RED}✗ Opgradering fejlede. Afslutter.${NC}"
     ((ERRORS++)); rm -f "$UPGRADE_TMP"; exit 1
@@ -99,7 +99,7 @@ echo ""
 # ─── Trin 5: Fjern ubrugte pakker ────────────────────────────────────────────
 echo -e "${BOLD}[5/6] Fjerner ubrugte pakker...${NC}"
 AUTOREMOVE_TMP=$(mktemp)
-apt autoremove --purge -y | tee "$AUTOREMOVE_TMP"
+apt-get autoremove --purge -y | tee "$AUTOREMOVE_TMP"
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     echo -e "${YELLOW}⚠ autoremove returnerede en fejl. Fortsætter...${NC}"; ((ERRORS++))
 fi
@@ -110,7 +110,7 @@ echo -e "${GREEN}✓ Oprydning fuldført${NC}"; echo ""
 
 # ─── Trin 6: Ryd pakke-cache ─────────────────────────────────────────────────
 echo -e "${BOLD}[6/6] Rydder pakke-cache...${NC}"
-apt clean || {
+apt-get clean || {
     echo -e "${YELLOW}⚠ Cache-oprydning fejlede. Fortsætter...${NC}"; ((ERRORS++))
 }
 echo -e "${GREEN}✓ Cache ryddet${NC}"; echo ""
