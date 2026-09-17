@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.2.0 — 2026-09-18
+
+### Rettet
+- **Rapporten viste altid 0 opgraderede pakker** på systemer med dansk sprog, fordi apt's statuslinje blev læst på engelsk. Scriptet kører nu med `LC_ALL=C.UTF-8`, så apt/dpkg/flatpak svarer på engelsk (scriptets egne beskeder er stadig danske).
+- **Pakker der blev holdt tilbage** ("kept back", typisk pakker på hold) blev aldrig vist. Rapporten viser nu antal og navne, og hvilke pakker der er sat på hold med `apt-mark`.
+- **Flatpak-tælleren** talte linjenumre i skærmoutputtet og missede derfor nr. 10 og op, talte runtimes og fjernelser med som apps, og skrev et ekstra "0" på dage uden opdateringer. Tælles nu ved at sammenligne installerede refs/commits før og efter, opdelt i apps og runtimes (opdateret / nye / fjernet).
+- **`apt-get update` fik grønt flueben, selv når en kilde ikke kunne hentes** (apt melder kun en advarsel ved netværksfejl og returnerer 0). Kører nu med `APT::Update::Error-Mode=any`; fejlende kilder vises i rødt og tælles som fejl, mens opgraderingen fortsætter med de lister, der findes.
+
+### Tilføjet
+- **Sikkerhedsstatus (trin 8):** installerer `debian-security-support`, hvis den mangler, og kører `check-support-status`. Rapporten skelner mellem pakker UDEN sikkerhedssupport og pakker med begrænset support.
+- **LTS-ur:** Debian 12 får sikkerhedsopdateringer til 2028-06-30. Rapporten viser altid dage tilbage, gul advarsel ved ≤ 30 dage (`LTS_WARN_DAYS`), rød alarm ved ≤ 7 dage (`LTS_ALARM_DAYS`) og efter datoen. Egen huskeseddel i `LTS_END_NOTE`.
+- **Automatiske opdateringer:** rapporten viser, om `unattended-upgrades` er aktiv, og hvor mange natlige kørsler/pakker der er i denne måneds apt-log. Det forklarer, hvorfor en manuel kørsel ofte finder få opdateringer.
+- **Firmware (trin 7):** `fwupdmgr refresh` → `get-updates` → `update` med `--no-reboot-check` (genstarter aldrig af sig selv), `--no-unreported-check` (sender ingen rapporter til LVFS) og `--no-metadata-check`. Returkode 2 ("intet at gøre") behandles ikke længere som fejl. Opdateringer, der findes på LVFS men ikke kan installeres (fx for lidt plads i UEFI-variabellageret), vises med fwupd's begrundelse i stedet for et falsk "opdateret".
+- **`--auto` er nu reelt ikke-interaktivt:** `DEBIAN_FRONTEND=noninteractive` og dpkg `--force-confdef --force-confold`, så et debconf-spørgsmål eller en konfigurationsfil-konflikt ikke kan få en cron-kørsel til at hænge. Interaktive kørsler spørger som hidtil.
+- `dpkg --configure -a` før fix-broken (fuldfører en afbrudt installation).
+- Genstart-tjek sammenligner også kørende kerne med nyeste installerede kerne (filen `/var/run/reboot-required` oprettes kun af visse pakker).
+- Advarsel om Flatpak-komponenter, der er markeret end-of-life.
+- Varighed i rapporten, log-rotation ved 5 MB, returkode 1 hvis der var fejl (til cron).
+- `.gitattributes` sikrer LF-linjeskift i `.sh`-filer ved checkout på Windows.
+
+### Ændret
+- Trin er nu [1/8] … [8/8]. Rapporten har fået linjerne Pakkekilder, Pakker holdt tilbage, Fastholdte pakker (hold), Flatpak-runtimes, Firmware, Sikkerhedssupport (LTS) og Automatiske opdateringer.
+
+---
+
 ## v1.1.0 — 2026-06-18
 
 ### Tilføjet
