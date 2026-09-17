@@ -61,7 +61,7 @@ Uden dette kan en cron-kørsel hænge for evigt på et spørgsmål, ingen ser.
   Fastholdte pakker (hold):        1 — heroic
   Flatpak-apps opdateret:          0  (nye: 0, fjernet: 0)
   Flatpak-runtimes opdateret:      0  (nye: 0, fjernet: 0)
-  Firmware:                        ingen opdateringer tilgængelige
+  Firmware:                        ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)
   Sikkerhedssupport (LTS):         2 UDEN support (intel-mediasdk mbedtls), 7 med begrænset
   Automatiske opdateringer:        aktiv — 7 natlige kørsler / 14 pakker i denne måneds log, senest 2026-09-15
   Diskplads ledig:                 25G
@@ -77,7 +77,7 @@ Linjerne betyder:
 
 - **Pakker holdt tilbage** — pakker apt ville opgradere, men ikke måtte (typisk fordi de er sat på hold). De får heller ikke sikkerhedsrettelser, så tallet bør normalt være 0.
 - **Fastholdte pakker (hold)** — alt hvad `apt-mark showhold` viser.
-- **Firmware** — "har opdateringer, men de kunne ikke installeres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det. fwupd's begrundelse står med på linjen (typisk for lidt plads i UEFI-variabellageret på ældre maskiner).
+- **Firmware** — én linje pr. enhed med nuværende og ny version. "kan ikke opdateres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det; fwupd's begrundelse står med (typisk for lidt plads i UEFI-variabellageret på ældre maskiner). Scriptet læser selv Secure Boot-status fra firmwaren: er det kun Secure Boot-listerne (db/dbx), der afvises, og Secure Boot er slået fra, er det uden betydning og vises som "ingen relevante". Er Secure Boot slået til, får du en advarsel.
 - **Sikkerhedssupport (LTS)** — fra `check-support-status`. "UDEN support" er alvorligt: fjern pakken, hvis du ikke bruger den. "Begrænset" er til orientering (typisk "kun til betroet indhold").
 - **Automatiske opdateringer** — om `unattended-upgrades` kører om natten. Gør den det, er det normalt, at en manuel kørsel finder få eller ingen Debian-opdateringer: de er allerede installeret.
 

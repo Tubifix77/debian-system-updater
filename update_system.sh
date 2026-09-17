@@ -224,25 +224,79 @@ if command -v fwupdmgr &> /dev/null; then
         warn "Firmware-metadata fra LVFS kunne ikke hentes (kode $FW_REFRESH_RC) — tjekker med de data, der allerede findes."
         FW_NOTE=" (metadata kunne ikke hentes — se log)"; ((ERRORS++))
     fi
-    fwupdmgr get-updates "${FW_FLAGS[@]}" 2>&1 | tee "$TMP/fw.txt"
+    # Fuldt output gemmes i en tempfil; på skærmen vises én linje pr. enhed.
+    # (fwupd farvelægger sin tekst selv i filer; farvekoderne fjernes før tolkning)
+    fwupdmgr get-updates "${FW_FLAGS[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$TMP/fw.txt"
     FW_RC=${PIPESTATUS[0]}
     case "$FW_RC" in
         0)  # mindst én enhed har en opdatering på LVFS
-            FW_DEVICES=$(grep -c 'Device ID:' "$TMP/fw.txt")
-            fwupdmgr update "${FW_FLAGS[@]}" --no-reboot-check 2>&1 | tee "$TMP/fw_update.txt"
-            FW_UPD_RC=${PIPESTATUS[0]}
-            FW_INSTALLED=$(grep -c 'Successfully installed firmware' "$TMP/fw_update.txt")
-            # fwupd's begrundelse hvis firmwaren afviser (fx for lidt plads i UEFI-variabellageret)
-            FW_REASON=$(grep -oP 'Update Error:\s*\K[^,]*' "$TMP/fw.txt" | sort -u | paste -sd ';' | cut -c1-120)
-            if [ "$FW_INSTALLED" -gt 0 ]; then
-                FIRMWARE_STATUS="$FW_INSTALLED enhed(er) opdateret — se log${FW_NOTE}"; ok "Firmware opdateret"
-            elif [ "$FW_UPD_RC" -eq 0 ] || [ "$FW_UPD_RC" -eq 2 ]; then
-                FIRMWARE_STATUS="$FW_DEVICES enhed(er) har opdateringer, men de kunne ikke installeres: ${FW_REASON:-se log}"
+            # Hardware-tjek: er Secure Boot slået til? Opdateringer af Secure Boot-
+            # listerne (db/dbx) betyder intet, når Secure Boot er slået fra, og på
+            # ældre maskiner kan de ofte ikke installeres (for lidt plads i UEFI-lageret).
+            SB_STATE="ukendt"
+            SB_VAR=$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -1)
+            if [ -n "$SB_VAR" ]; then
+                case "$(od -An -tu1 -j4 -N1 "$SB_VAR" 2>/dev/null | tr -d ' ')" in
+                    1) SB_STATE="til" ;;
+                    0) SB_STATE="fra" ;;
+                esac
+            fi
+            # Én linje pr. enhed: navn, nuværende version, ny version, evt. afvisning fra firmwaren
+            awk '
+                function flush() { if (name != "") printf "%s\t%s\t%s\t%s\n", name, cur, new, err }
+                /^[│ ]*[├└]─[^:]+:$/ { hdr = $0; sub(/^[│ ]*[├└]─/, "", hdr); sub(/:$/, "", hdr); next }
+                /Device ID:/       { flush(); name = hdr; cur = ""; new = ""; err = ""; next }
+                /Current version:/ { if (name != "" && cur == "") { cur = $0; sub(/.*Current version: */, "", cur) }; next }
+                /New version:/     { if (name != "" && new == "") { new = $0; sub(/.*New version: */, "", new) }; next }
+                /Update Error:/    { if (name != "") { err = $0; sub(/.*Update Error: */, "", err) }; next }
+                END { flush() }
+            ' "$TMP/fw.txt" > "$TMP/fw_devices.tsv"
+            FW_DEVICES=$(grep -c . "$TMP/fw_devices.tsv")
+            FW_BLOCKED=$(awk -F'\t' '$4 != ""' "$TMP/fw_devices.tsv" | wc -l)
+            FW_BLOCKED_SB=$(awk -F'\t' '$4 != "" && $1 ~ /UEFI dbx|UEFI CA|UEFI db|KEK|PCA|Signature Database/' "$TMP/fw_devices.tsv" | wc -l)
+            FW_READY=$((FW_DEVICES - FW_BLOCKED))
+            FW_REASON=$(awk -F'\t' '$4 != "" {print $4}' "$TMP/fw_devices.tsv" | sed 's/,.*//' | sort -u | paste -sd ';')
+            awk -F'\t' '{ line = "  • " $1 ": " ($2 == "" ? "?" : $2) " → " ($3 == "" ? "?" : $3)
+                          if ($4 != "") line = line "  (afvist af firmwaren: " $4 ")"
+                          print line }' "$TMP/fw_devices.tsv"
+            FIRMWARE_STATUS=""
+            if [ "$FW_DEVICES" -eq 0 ]; then
+                cat "$TMP/fw.txt"
+                FIRMWARE_STATUS="opdateringer fundet, men output kunne ikke tolkes — se log"
                 warn "$FIRMWARE_STATUS"
-            else
-                FIRMWARE_STATUS="FEJL ved opdatering (kode $FW_UPD_RC)"
-                fail "Firmware-opdatering fejlede (kode $FW_UPD_RC)."; ((ERRORS++))
-            fi ;;
+            fi
+            # Installér kun det, firmwaren faktisk vil tage imod
+            if [ "$FW_READY" -gt 0 ]; then
+                fwupdmgr update "${FW_FLAGS[@]}" --no-reboot-check 2>&1 | tee "$TMP/fw_update.txt"
+                FW_UPD_RC=${PIPESTATUS[0]}
+                if grep -q 'Successfully installed firmware' "$TMP/fw_update.txt"; then
+                    FIRMWARE_STATUS="$FW_READY enhed(er) opdateret — se log"; ok "Firmware opdateret"
+                    FW_REBOOT=true
+                elif [ "$FW_UPD_RC" -eq 0 ] || [ "$FW_UPD_RC" -eq 2 ]; then
+                    FIRMWARE_STATUS="$FW_READY enhed(er) har opdateringer, men de blev ikke installeret — se log"
+                    warn "$FIRMWARE_STATUS"
+                else
+                    FIRMWARE_STATUS="FEJL ved opdatering (kode $FW_UPD_RC)"
+                    fail "Firmware-opdatering fejlede (kode $FW_UPD_RC)."; ((ERRORS++))
+                fi
+            fi
+            # Enheder firmwaren afviser
+            if [ "$FW_BLOCKED" -gt 0 ]; then
+                if [ "$FW_BLOCKED_SB" -eq "$FW_BLOCKED" ] && [ "$SB_STATE" = "fra" ]; then
+                    FW_BLOCKED_NOTE="ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)"
+                    echo "  Secure Boot er slået fra på denne maskine, så de manglende db/dbx-opdateringer er uden betydning."
+                    ok "Firmware tjekket"
+                else
+                    FW_BLOCKED_NOTE="$FW_BLOCKED enhed(er) kan ikke opdateres: ${FW_REASON:-se log}"
+                    if [ "$FW_BLOCKED_SB" -gt 0 ] && [ "$SB_STATE" = "til" ]; then
+                        FW_BLOCKED_NOTE="$FW_BLOCKED_NOTE — Secure Boot er slået TIL, så det bør undersøges"
+                    fi
+                    warn "$FW_BLOCKED_NOTE"
+                fi
+                FIRMWARE_STATUS="${FIRMWARE_STATUS:+$FIRMWARE_STATUS; }$FW_BLOCKED_NOTE"
+            fi
+            [ -z "$FIRMWARE_STATUS" ] && FIRMWARE_STATUS="ingen opdateringer tilgængelige"
+            FIRMWARE_STATUS="$FIRMWARE_STATUS$FW_NOTE" ;;
         2)
             FIRMWARE_STATUS="ingen opdateringer tilgængelige${FW_NOTE}"; ok "Firmware er ajour" ;;
         *)
@@ -337,6 +391,9 @@ RUNNING_KERNEL=$(uname -r)
 NEWEST_KERNEL=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | sort -V | tail -1)
 if [ -n "$NEWEST_KERNEL" ] && [ "$NEWEST_KERNEL" != "$RUNNING_KERNEL" ]; then
     REBOOT_NEEDED=true; REBOOT_REASON="kører kerne $RUNNING_KERNEL, men nyeste installerede er $NEWEST_KERNEL"
+fi
+if [ "${FW_REBOOT:-false}" = true ]; then
+    REBOOT_NEEDED=true; REBOOT_REASON="en firmware-opdatering fuldføres først ved genstart"
 fi
 
 # ─── Diskplads efter ──────────────────────────────────────────────────────────
