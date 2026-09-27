@@ -17,7 +17,22 @@ jobs:
       - name: Install ShellCheck
         run: apt-get update && apt-get install -y --no-install-recommends shellcheck
       - name: Run ShellCheck
-        run: shellcheck --severity=warning update_system.sh tests/run_tests.sh
+        run: shellcheck --severity=warning update_system.sh tests/run_tests.sh tests/unit_tests.sh
+
+  unit:
+    name: unit (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:bookworm", "debian:trixie"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install python3 (for the firmware JSON tests)
+        run: apt-get update && apt-get install -y --no-install-recommends python3
+      - name: Run the unit tests
+        run: bash tests/unit_tests.sh
 
   test:
     name: test (${{ matrix.image }})

@@ -160,9 +160,15 @@ If you use an application firewall such as OpenSnitch, `/usr/bin/fwupdmgr` must 
 
 ## Development and tests
 
-Every push runs the [CI workflow](.github/workflows/ci.yml): ShellCheck, and the integration tests in `tests/run_tests.sh` inside clean Debian 12 and Debian 13 containers. The tests run the real script in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source and the option handling.
+The script is organised as one function per step with a `main` function, following the [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html). The one deliberate deviation is that some Danish and English message strings are longer than 80 characters, because splitting sentences would make them harder to read.
 
-The tests change system settings, so they refuse to run anywhere but a throwaway container or VM with `UPDATER_TESTS=1`:
+Every push runs the [CI workflow](.github/workflows/ci.yml):
+
+- **ShellCheck** on all scripts, with no findings at any severity.
+- **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
+- **Integration tests** in `tests/run_tests.sh`, which run the real script in clean Debian 12 and Debian 13 containers in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source and the option handling.
+
+The integration tests change system settings, so they refuse to run anywhere but a throwaway container or VM with `UPDATER_TESTS=1`:
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src -e UPDATER_TESTS=1 debian:trixie bash tests/run_tests.sh

@@ -160,9 +160,15 @@ Bruger du et program-firewall som OpenSnitch, skal `/usr/bin/fwupdmgr` have lov 
 
 ## Udvikling og test
 
-Hvert push kører [CI-workflowet](.github/workflows/ci.yml): ShellCheck og integrationstestene i `tests/run_tests.sh` i rene Debian 12- og Debian 13-containere. Testene kører det rigtige script i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde og håndteringen af tilvalg.
+Scriptet er opbygget med én funktion pr. trin og en `main`-funktion efter [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html). Den eneste bevidste afvigelse er, at nogle danske og engelske beskeder er længere end 80 tegn, fordi opdelte sætninger ville være sværere at læse.
 
-Testene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:
+Hvert push kører [CI-workflowet](.github/workflows/ci.yml):
+
+- **ShellCheck** på alle scripts, uden fund på noget niveau.
+- **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
+- **Integrationstest** i `tests/run_tests.sh`, der kører det rigtige script i rene Debian 12- og Debian 13-containere i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde og håndteringen af tilvalg.
+
+Integrationstestene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src -e UPDATER_TESTS=1 debian:trixie bash tests/run_tests.sh

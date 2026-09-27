@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.6.0 — 2026-09-27
+
+### Changed
+- **Restructured along the Google Shell Style Guide:** one function per step and a `main` function, a header comment on every non-trivial function, `local` variables, `readonly` constants, `[[ … ]]` and `(( … ))`, 2-space indentation, and error messages on STDERR. The behaviour and the report are unchanged.
+- The script can be loaded (sourced) without running, which the unit tests use. Executed, or piped into bash, it runs as before.
+- `--lang` without a value now stops with exit code 2 instead of being ignored.
+- ShellCheck now reports no findings at any severity; the last two notes (`ls` on fixed system paths) are gone.
+
+### Added
+- **Unit tests** in `tests/unit_tests.sh` (56 checks) for language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They need no root. CI runs them in Debian 12 and 13 containers.
+
+### Fixed before release
+- `/etc/os-release` is now read in a fresh bash process with an empty environment. During the restructure, a read-only `VERSION` constant clashed with the `VERSION` line in os-release, and the release showed as "unknown system". The integration tests and a test run on the Debian 12 laptop caught it before release; a unit test with a complete os-release file now guards against it.
+
+### Tested
+- Debian 12 laptop: the report is identical to v1.5, apart from the version number.
+- Local Docker and GitHub Actions: ShellCheck, the unit tests and the integration tests on Debian 12 and Debian 13.
+
+---
+
 ## v1.5.0 — 2026-09-27
 
 ### Added
