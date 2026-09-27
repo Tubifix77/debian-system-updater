@@ -1,6 +1,7 @@
 #!/bin/bash
-# Debian System Updater v1.2
-# Komplet vedligeholdelse af Debian 12-systemet med farveoutput, log og afsluttende rapport.
+# Debian System Updater v1.3
+# Komplet vedligeholdelse af Debian 12 og 13 med farveoutput, log og afsluttende rapport.
+# Scriptet finder selv ud af, hvilken Debian-udgave det kører på.
 #
 # Brug:
 #   sudo bash update_system.sh           # interaktiv — venter på ENTER til sidst
@@ -11,13 +12,23 @@
 # ─── Indstillinger ────────────────────────────────────────────────────────────
 LOG_FILE="/var/log/debian-updater.log"
 LOG_MAX_BYTES=5242880   # roter loggen (til .1) når den overstiger 5 MB
-
-# Debian 12 "bookworm" får LTS-sikkerhedsopdateringer til og med denne dato
-# (kilde: https://wiki.debian.org/LTS). Herefter kommer der ingen rettelser.
-LTS_END="2028-06-30"
 LTS_WARN_DAYS=30        # gul advarsel når der er så mange dage (eller færre) tilbage
 LTS_ALARM_DAYS=7        # rød alarm når der er så mange dage (eller færre) tilbage
-LTS_END_NOTE="Valg herefter: nyere Debian (GT 730M kører der kun på den åbne nouveau-driver), nyt grafikkort/pc, eller hold maskinen væk fra internettet."
+LTS_END_NOTE="Planlæg skiftet til den næste Debian-udgave i god tid: https://www.debian.org/releases/"
+
+# Supportdatoer pr. Debian-udgave. Tilføj en linje, når en ny udgave udkommer.
+# Kilder: https://www.debian.org/releases/<kodenavn>/ og https://wiki.debian.org/LTS
+# (for bookworm siger udgivelsessiden fuld support til 2026-07-11, mens LTS-wikien
+#  angiver LTS fra 2026-06-11; slutdatoen 2028-06-30 er den samme begge steder).
+#   version  kodenavn   fuld support til   LTS til
+DEBIAN_RELEASES="
+12 bookworm 2026-07-11 2028-06-30
+13 trixie   2028-08-09 2030-06-30
+"
+
+# Egne indstillinger (fx din egen LTS_END_NOTE) kan lægges i denne valgfrie fil,
+# så de ikke forsvinder, når scriptet opdateres.
+CONFIG_FILE="/etc/default/debian-system-updater"
 
 # ─── Farver og hjælpefunktioner ───────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -34,6 +45,26 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Fejl: Dette script skal køres med sudo!${NC}"
     exit 1
 fi
+
+# ─── Hvilken Debian-udgave? ───────────────────────────────────────────────────
+# Læses i en subshell, så os-release ikke overskriver scriptets egne variabler.
+IFS='|' read -r OS_ID OS_VERSION_ID OS_PRETTY < <(
+    . /etc/os-release 2>/dev/null
+    printf '%s|%s|%s\n' "${ID:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}"
+)
+OS_PRETTY=${OS_PRETTY:-ukendt system}
+RELEASE_KNOWN=false; REGULAR_END=""; LTS_END=""
+if [ "$OS_ID" = "debian" ]; then
+    REL_LINE=$(awk -v v="$OS_VERSION_ID" '$1 == v' <<< "$DEBIAN_RELEASES")
+    if [ -n "$REL_LINE" ]; then
+        read -r _ _ REGULAR_END LTS_END <<< "$REL_LINE"
+    fi
+fi
+# Egne indstillinger læses sidst, så de kan overskrive alt ovenfor
+# (også REGULAR_END og LTS_END for en udgave, der ikke står i tabellen).
+# shellcheck source=/dev/null
+[ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+[ -n "$LTS_END" ] && RELEASE_KNOWN=true
 
 # ─── Tilstand ─────────────────────────────────────────────────────────────────
 AUTO=false
@@ -64,7 +95,6 @@ START_EPOCH=$(date +%s)
 
 # Al output (stdout + stderr) skrives til skærm og logfil i realtid
 exec > >(tee -a "$LOG_FILE") 2>&1
-TEE_PID=$!
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -78,15 +108,24 @@ FP_APP_UPD=0; FP_APP_NEW=0; FP_APP_REM=0
 FP_RT_UPD=0;  FP_RT_NEW=0;  FP_RT_REM=0
 FLATPAK_INSTALLED=false
 FIRMWARE_STATUS="fwupd ikke installeret"
-SUPPORT_STATUS="ukendt"; SUPPORT_COUNT=0
+SUPPORT_STATUS="ukendt"; SUPPORT_COUNT=0; SUPPORT_ENDED=0; SUPPORT_LIMITED=0
 UU_STATUS="ikke aktiv"
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 echo ""
 line
-echo -e "${CYAN}${BOLD}  Debian System Updater v1.2  │  ${START_TIME}    ${NC}"
+echo -e "${CYAN}${BOLD}  Debian System Updater v1.3  │  ${START_TIME}    ${NC}"
+echo -e "${CYAN}${BOLD}  ${OS_PRETTY}${NC}"
 line
 echo ""
+if [ "$OS_ID" != "debian" ]; then
+    warn "Scriptet er lavet til Debian 12 og 13, men systemet er: ${OS_PRETTY}."
+    warn "Fortsætter med apt, Flatpak og firmware; sikkerhedsstatus og support-ur springes over."
+    echo ""
+elif ! $RELEASE_KNOWN; then
+    warn "${OS_PRETTY} står ikke i scriptets datotabel (DEBIAN_RELEASES) — alt andet kører, men support-uret vises ikke."
+    echo ""
+fi
 
 # ─── Diskplads pre-check ──────────────────────────────────────────────────────
 # Afbryder ved < 1 GB, advarer ved < 2 GB
@@ -209,7 +248,14 @@ ok "Cache ryddet"; echo ""
 
 # ─── Trin 7: Firmware (fwupd) ────────────────────────────────────────────────
 step "[7/8] Firmware-opdateringer (fwupd)..."
-if command -v fwupdmgr &> /dev/null; then
+# I en container (WSL, Docker, LXC …) starter fwupd-tjenesten slet ikke
+# (dens unit har ConditionVirtualization=!container); firmwaren tilhører værten.
+# Samme test som systemd bruger — ellers venter fwupdmgr forgæves i 25 sekunder.
+FW_CONTAINER=$(systemd-detect-virt --container 2>/dev/null)
+if command -v fwupdmgr &> /dev/null && [ -n "$FW_CONTAINER" ] && [ "$FW_CONTAINER" != "none" ]; then
+    echo "Kører i en container ($FW_CONTAINER) — firmware opdateres på værtsmaskinen. Springer over."
+    FIRMWARE_STATUS="sprunget over (container: $FW_CONTAINER)"
+elif command -v fwupdmgr &> /dev/null; then
     # --no-unreported-check: send aldrig rapporter til LVFS af sig selv
     # --no-metadata-check:   vi opdaterer metadata eksplicit lige herunder
     # --no-reboot-check:     spørg/genstart aldrig — rapporten nederst siger til
@@ -308,18 +354,22 @@ else
 fi
 echo ""
 
-# ─── Trin 8: Sikkerhedsstatus (Debian LTS) ───────────────────────────────────
-step "[8/8] Sikkerhedsstatus for Debian 12 (LTS)..."
-# debian-security-support fortæller hvilke installerede pakker LTS-holdet ikke
-# (længere) retter sikkerhedshuller i. Ellers opdager man det aldrig.
-if ! dpkg-query -W -f='${Status}' debian-security-support 2>/dev/null | grep -q "install ok installed"; then
+# ─── Trin 8: Sikkerhedsstatus ────────────────────────────────────────────────
+step "[8/8] Sikkerhedsstatus for ${OS_PRETTY}..."
+# debian-security-support fortæller hvilke installerede pakker Debians
+# sikkerheds- og LTS-hold ikke (længere) retter huller i. Ellers opdager man det aldrig.
+if [ "$OS_ID" != "debian" ]; then
+    echo "Ikke et Debian-system — springer over."
+    SUPPORT_STATUS="sprunget over (ikke Debian)"
+elif ! dpkg-query -W -f='${Status}' debian-security-support 2>/dev/null | grep -q "install ok installed"; then
     echo "Installerer debian-security-support (viser pakker uden sikkerhedssupport)..."
     apt-get "${APT_OPTS[@]}" install -y debian-security-support 2>&1 || {
         warn "Kunne ikke installere debian-security-support."; ((ERRORS++))
     }
 fi
-SUPPORT_ENDED=0; SUPPORT_LIMITED=0
-if command -v check-support-status &> /dev/null; then
+if [ "$OS_ID" != "debian" ]; then
+    :
+elif command -v check-support-status &> /dev/null; then
     check-support-status > "$TMP/support.txt" 2>&1
     # Format: "* Source:navn, ended on DATO ..." = support ophørt (alvorligt)
     #         "* Source:navn"                    = begrænset support (til orientering)
@@ -357,9 +407,13 @@ else
     SUPPORT_STATUS="ukendt (debian-security-support mangler)"
 fi
 
-# Nedtælling til LTS-slut
-LTS_END_EPOCH=$(date -d "$LTS_END" +%s)
-LTS_DAYS_LEFT=$(( (LTS_END_EPOCH - $(date +%s)) / 86400 ))
+# Nedtælling: fuld sikkerhedssupport → LTS → slut
+NOW_EPOCH=$(date +%s)
+LTS_DAYS_LEFT=0; REGULAR_DAYS_LEFT=-1
+if $RELEASE_KNOWN; then
+    LTS_DAYS_LEFT=$(( ($(date -d "$LTS_END" +%s) - NOW_EPOCH) / 86400 ))
+    [ -n "$REGULAR_END" ] && REGULAR_DAYS_LEFT=$(( ($(date -d "$REGULAR_END" +%s) - NOW_EPOCH) / 86400 ))
+fi
 
 # Automatiske opdateringer (unattended-upgrades) installerer typisk de fleste
 # sikkerhedsrettelser om natten. Derfor finder en manuel kørsel ofte kun få.
@@ -433,9 +487,9 @@ else
 fi
 row "Firmware:" "$FIRMWARE_STATUS"
 if [ "$SUPPORT_ENDED" -gt 0 ]; then
-    echo -e "  $(printf '%-32s ' 'Sikkerhedssupport (LTS):')${YELLOW}${SUPPORT_STATUS}${NC}"
+    echo -e "  $(printf '%-32s ' 'Sikkerhedssupport:')${YELLOW}${SUPPORT_STATUS}${NC}"
 else
-    row "Sikkerhedssupport (LTS):" "$SUPPORT_STATUS"
+    row "Sikkerhedssupport:" "$SUPPORT_STATUS"
 fi
 row "Automatiske opdateringer:" "$UU_STATUS"
 row "Diskplads ledig:" "$ROOT_FREE_H_AFTER"
@@ -446,21 +500,29 @@ else
 fi
 line
 
-# ─── LTS-ur ───────────────────────────────────────────────────────────────────
+# ─── Support-ur ───────────────────────────────────────────────────────────────
 echo ""
-if [ "$LTS_DAYS_LEFT" -lt 0 ]; then
-    echo -e "${RED}${BOLD}  ✗  DEBIAN 12 LTS SLUTTEDE ${LTS_END} — for $(( -LTS_DAYS_LEFT )) dage siden.${NC}"
+VER_LABEL="Debian ${OS_VERSION_ID}"
+if ! $RELEASE_KNOWN; then
+    echo -e "  🗓  Support-ur: ingen datoer for ${OS_PRETTY} (se DEBIAN_RELEASES øverst i scriptet)."
+elif [ "$LTS_DAYS_LEFT" -lt 0 ]; then
+    echo -e "${RED}${BOLD}  ✗  ${VER_LABEL^^}: SIKKERHEDSSUPPORT SLUTTEDE ${LTS_END} — for $(( -LTS_DAYS_LEFT )) dage siden.${NC}"
     echo -e "${RED}     Systemet får IKKE længere sikkerhedsopdateringer.${NC}"
     echo -e "${RED}     ${LTS_END_NOTE}${NC}"
 elif [ "$LTS_DAYS_LEFT" -le "$LTS_ALARM_DAYS" ]; then
-    echo -e "${RED}${BOLD}  ⚠  DEBIAN 12 LTS SLUTTER OM ${LTS_DAYS_LEFT} DAGE (${LTS_END})!${NC}"
+    echo -e "${RED}${BOLD}  ⚠  ${VER_LABEL^^}: SIKKERHEDSSUPPORT SLUTTER OM ${LTS_DAYS_LEFT} DAGE (${LTS_END})!${NC}"
     echo -e "${RED}     Herefter kommer der ingen sikkerhedsopdateringer.${NC}"
     echo -e "${RED}     ${LTS_END_NOTE}${NC}"
 elif [ "$LTS_DAYS_LEFT" -le "$LTS_WARN_DAYS" ]; then
-    echo -e "${YELLOW}${BOLD}  ⚠  Debian 12 LTS slutter om ${LTS_DAYS_LEFT} dage (${LTS_END}). Planlæg nu.${NC}"
+    echo -e "${YELLOW}${BOLD}  ⚠  ${VER_LABEL}: sikkerhedssupport slutter om ${LTS_DAYS_LEFT} dage (${LTS_END}). Planlæg nu.${NC}"
     echo -e "${YELLOW}     ${LTS_END_NOTE}${NC}"
+elif [ "$REGULAR_DAYS_LEFT" -ge 0 ]; then
+    echo -e "  🗓  ${VER_LABEL}: fuld sikkerhedssupport til ${REGULAR_END} (${REGULAR_DAYS_LEFT} dage), derefter LTS til ${LTS_END} — ${BOLD}${LTS_DAYS_LEFT} dage tilbage${NC}"
+    if [ "$REGULAR_DAYS_LEFT" -le "$LTS_WARN_DAYS" ]; then
+        echo -e "${YELLOW}     Om ${REGULAR_DAYS_LEFT} dage går ${VER_LABEL} over til LTS: ikke alle pakker dækkes. Trin 8 viser hvilke.${NC}"
+    fi
 else
-    echo -e "  🗓  Debian 12 LTS: sikkerhedsopdateringer til ${LTS_END} — ${BOLD}${LTS_DAYS_LEFT} dage tilbage${NC}"
+    echo -e "  🗓  ${VER_LABEL} LTS: sikkerhedsopdateringer til ${LTS_END} — ${BOLD}${LTS_DAYS_LEFT} dage tilbage${NC}"
 fi
 
 # ─── Reboot-advarsel ──────────────────────────────────────────────────────────

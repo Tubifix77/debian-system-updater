@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.3.0 — 2026-09-27
+
+### Tilføjet
+- **Debian 13 "trixie" i samme script.** Scriptet læser `/etc/os-release` og slår supportdatoerne op i tabellen `DEBIAN_RELEASES` (bookworm og trixie). Headeren viser den fundne udgave. På en Debian-udgave, der ikke står i tabellen, kører alt andet, og kun support-uret udelades. På et system, der ikke er Debian, springes sikkerhedsstatus og support-ur over med en advarsel.
+- **Support-ur i to faser:** fuld sikkerhedssupport og LTS vises hver for sig ("fuld sikkerhedssupport til 2028-08-09 (681 dage), derefter LTS til 2030-06-30"), med en gul note 30 dage før overgangen til LTS.
+- **Valgfri indstillingsfil** `/etc/default/debian-system-updater`, der overlever opdateringer af scriptet (fx `LTS_END_NOTE` og `LTS_WARN_DAYS`).
+- **Container-tjek i firmware-trinnet:** i WSL, Docker og LXC springes fwupd over (tjenesten har `ConditionVirtualization=!container` og starter ikke) i stedet for at vente 2 × 25 sekunder og melde to fejl.
+
+### Ændret
+- Den personlige GT 730M-note er fjernet fra scriptet; standardnoten er generel. En egen note lægges i indstillingsfilen.
+- Rapportlinjen "Sikkerhedssupport (LTS)" hedder nu "Sikkerhedssupport", og trin 8 viser den fundne udgave.
+- Ubrugt variabel (`TEE_PID`) fjernet; shellcheck-direktiv for den valgfrie indstillingsfil.
+
+### Testet
+- Debian 13 (WSL2-testdistro fra Debians eget WSL-image, 13.5, apt 3.0.3, flatpak 1.16.6, fwupd 2.0.20): 40 opgraderinger med én pakke på hold, Flatpak, unattended-upgrades, debian-security-support og en utilgængelig pakkekilde. apt-get's output er uændret i apt 3.0 (klassisk statuslinje og "kept back"-liste), og `APT::Update::Error-Mode=any` gør stadig en fejlende kilde til en fejl (returkode 100 i stedet for 0).
+- Debian 12 (bookworm-chroot bygget med debootstrap, apt 2.6.1): 3 opgraderinger, samme LTS-linje som før.
+- shellcheck 0.10.0: ingen advarsler.
+
+---
+
 ## v1.2.0 — 2026-09-18
 
 ### Rettet
