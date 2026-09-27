@@ -69,6 +69,10 @@ On Debian 13, which still has full support, the clock shows both phases:
 
 topgrade is the popular tool for updating many package managers at once, and it covers far more tools than this script. Its source code has no checks for Debian security support, support dates, held packages or Secure Boot (checked September 2026). Choose topgrade for one updater for everything; choose this script if you run Debian and want to know how healthy your system is and how long it will stay supported.
 
+### Out of scope on purpose
+
+Language package managers such as pip, Cargo and Ruby gems, and editor extensions such as VS Code's, are left out on purpose. They belong to each user rather than the system, Debian [discourages system-wide pip installs](https://www.debian.org/releases/bookworm/amd64/release-notes/ch-information.en.html), and developers usually want to control each tool themselves, which topgrade offers with its `disable` and `only` settings. This script stays a one-click updater for the Debian system itself.
+
 ## Built to be trusted
 
 - **No surprises.** It never reboots on its own, asks before installing firmware (by default), never sends reports anywhere (`fwupdmgr` runs with `--no-unreported-check`), keeps your config files in unattended runs and never touches your package sources.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- README (English and Danish): an "Out of scope on purpose" section explains why language package managers (pip, Cargo, Ruby gems) and editor extensions are left to tools like topgrade.
+
+---
+
 ## v1.6.1 — 2026-09-27
 
 ### Fixed

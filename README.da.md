@@ -69,6 +69,10 @@ På Debian 13, der stadig har fuld support, viser uret begge faser:
 
 topgrade er det populære værktøj til at opdatere mange pakkehåndteringer på én gang, og det dækker langt flere værktøjer end dette script. Dets kildekode har ingen kontrol af Debians sikkerhedssupport, supportdatoer, fastholdte pakker eller Secure Boot (tjekket september 2026). Vælg topgrade, hvis du vil have én opdatering til alt; vælg dette script, hvis du kører Debian og vil vide, hvor sundt dit system er, og hvor længe det bliver ved med at være understøttet.
 
+### Bevidst udeladt
+
+Pakkehåndteringer til programmeringssprog som pip, Cargo og Ruby gems samt editor-udvidelser som VS Codes er bevidst udeladt. De hører til den enkelte bruger og ikke til systemet, Debian [fraråder systemdækkende pip-installationer](https://www.debian.org/releases/bookworm/amd64/release-notes/ch-information.en.html), og udviklere vil som regel selv styre hvert værktøj, hvilket topgrade tilbyder med sine indstillinger `disable` og `only`. Dette script forbliver en et-kliks-opdatering af selve Debian-systemet.
+
 ## Bygget til at kunne stoles på
 
 - **Ingen overraskelser.** Det genstarter aldrig af sig selv, spørger før firmware installeres (som standard), sender aldrig rapporter nogen steder hen (`fwupdmgr` kører med `--no-unreported-check`), beholder dine konfigurationsfiler i automatiske kørsler og rører aldrig dine pakkekilder.
