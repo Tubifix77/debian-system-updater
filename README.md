@@ -26,9 +26,9 @@ Keeping a Debian desktop current takes several commands, and the warnings that m
 A real report from a Debian 12 laptop:
 
 ```
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
   REPORT  │  2026-09-27 15:43:06  │  duration 0m 12s
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
   Package sources:                 OK
   Packages upgraded:               0
   Packages newly installed:        0
@@ -42,7 +42,7 @@ A real report from a Debian 12 laptop:
   Automatic updates:               active — 11 nightly runs / 21 packages in this month's log, last 2026-09-26
   Free disk space:                 24G
   Errors:                          None
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
 
   🗓  Debian 12 LTS: security updates until 2028-06-30 — 641 days left
      Dates from: distro-info-data (/usr/share/distro-info/debian.csv)

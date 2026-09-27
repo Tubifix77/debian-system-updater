@@ -102,7 +102,8 @@ detect_release "${WORK}/os-release"
 check "os-release: ID"                      eq "${OS_ID}" debian
 check "os-release: VERSION_ID"              eq "${OS_VERSION_ID}" 13
 check "os-release: PRETTY_NAME"             eq "${OS_PRETTY}" "Debian GNU/Linux 13 (trixie)"
-check "os-release: the script's variables are untouched" eq "${UPDATER_VERSION}|${UI_LANG}" "1.6.0|en"
+check "os-release: the script's variables are untouched" \
+  eq "${UPDATER_VERSION}|${UI_LANG}" "$(sed -n 's/^readonly UPDATER_VERSION="\(.*\)"/\1/p' update_system.sh)|en"
 detect_release "${WORK}/missing"
 check "missing os-release: unknown system"  eq "${OS_PRETTY}" "unknown system"
 
@@ -282,6 +283,18 @@ check "unattended-upgrades: runs, packages and last date" \
 summarise_unattended_upgrades "${WORK}/missing.log"
 check "unattended-upgrades: missing log" \
   eq "${UU_STATUS}" "active — 0 nightly runs / 0 packages in this month's log, last unknown"
+
+# ─── Layout ───────────────────────────────────────────────────────────────────
+# The lines above and below the titles must reach past the longest title with a
+# margin of at least 3 characters. ASCII "|" stands in for "│" so that the
+# lengths are the same in every locale.
+header_title="  Debian System Updater v${UPDATER_VERSION}  |  2026-09-27 17:15:43"
+report_title="  RAPPORT  |  2026-09-27 17:15:55  |  varighed 59m 59s"
+check "line() draws LINE_WIDTH characters"   eq "$(line | grep -o '═' | wc -l)" "${LINE_WIDTH}"
+check "the header line is 3+ wider than the title" \
+  [ "${LINE_WIDTH}" -ge $(( ${#header_title} + 3 )) ]
+check "the report line is 3+ wider than the longest report title" \
+  [ "${LINE_WIDTH}" -ge $(( ${#report_title} + 3 )) ]
 
 echo "== ${PASSES} passed, ${FAILS} failed, ${SKIPS} skipped"
 (( FAILS == 0 ))

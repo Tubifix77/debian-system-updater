@@ -19,8 +19,9 @@
 # the final report. Function-local variables are lower case.
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly UPDATER_VERSION="1.6.0"
+readonly UPDATER_VERSION="1.6.1"
 readonly CONFIG_FILE="/etc/default/debian-system-updater"
+readonly LINE_WIDTH=57   # the longest title ends at column 54; 3 characters of margin
 readonly RED='\033[0;31m' YELLOW='\033[1;33m' GREEN='\033[0;32m'
 readonly CYAN='\033[0;36m' BOLD='\033[1m' NC='\033[0m'
 
@@ -50,7 +51,11 @@ ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 fail() { echo -e "${RED}✗ $*${NC}" >&2; }
 step() { echo -e "${BOLD}$*${NC}"; }
-line() { echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════${NC}"; }
+line() {
+  local bar
+  printf -v bar '%*s' "${LINE_WIDTH}" ''
+  echo -e "${CYAN}${BOLD}${bar// /═}${NC}"
+}
 row()  { printf '  %-32s %s\n' "$1" "$2"; }                    # label, value
 rowc() { echo -e "  $(printf '%-32s' "$1") ${2}${3}${NC}"; }    # label, colour, value
 add_error() { (( ERRORS += 1 )); }
@@ -323,7 +328,7 @@ init_counters() {
 print_header() {
   echo ""
   line
-  echo -e "${CYAN}${BOLD}  Debian System Updater v${UPDATER_VERSION}  │  ${START_TIME}    ${NC}"
+  echo -e "${CYAN}${BOLD}  Debian System Updater v${UPDATER_VERSION}  │  ${START_TIME}${NC}"
   echo -e "${CYAN}${BOLD}  ${OS_PRETTY}${NC}"
   line
   echo ""
@@ -1027,7 +1032,7 @@ collect_status() {
 print_report() {
   echo ""
   line
-  echo -e "${CYAN}${BOLD}  $(t "RAPPORT" "REPORT")  │  ${END_TIME}  │  $(t "varighed" "duration") ${DURATION_H}    ${NC}"
+  echo -e "${CYAN}${BOLD}  $(t "RAPPORT" "REPORT")  │  ${END_TIME}  │  $(t "varighed" "duration") ${DURATION_H}${NC}"
   line
   if [[ "${SOURCES_STATUS}" == "OK" ]]; then
     row "$(t "Pakkekilder:" "Package sources:")" "OK"

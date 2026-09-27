@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v1.6.1 — 2026-09-27
+
+### Fixed
+- The lines above and below the header and the report title were 50 characters and stopped in the middle of the time. They are now 57, so the longest title (ending at column 54) fits with a 3-character margin. The width is one constant (`LINE_WIDTH`), and a unit test fails if a title ever outgrows it.
 
 ### Changed
 - The README (English and Danish) now leads with what the script adds: a one-line summary, the questions the report answers, a real example, a comparison with apt on its own and with topgrade, "Built to be trusted", and a quick start. Badges for CI, supported releases, ShellCheck and the license.

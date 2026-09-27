@@ -26,9 +26,9 @@ At holde et Debian-skrivebord ajour kræver flere kommandoer, og de advarsler, d
 En rigtig rapport fra en Debian 12-bærbar:
 
 ```
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
   RAPPORT  │  2026-09-27 16:30:27  │  varighed 0m 12s
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
   Pakkekilder:                     OK
   Pakker opgraderet:               0
   Pakker nyinstalleret:            0
@@ -42,7 +42,7 @@ En rigtig rapport fra en Debian 12-bærbar:
   Automatiske opdateringer:        aktiv — 11 natlige kørsler / 21 pakker i denne måneds log, senest 2026-09-26
   Diskplads ledig:                 24G
   Fejl:                            Ingen
-══════════════════════════════════════════════════
+═════════════════════════════════════════════════════════
 
   🗓  Debian 12 LTS: sikkerhedsopdateringer til 2028-06-30 — 641 dage tilbage
      Datoer fra: distro-info-data (/usr/share/distro-info/debian.csv)
