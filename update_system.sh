@@ -1285,7 +1285,7 @@ pad_right() {
 #   Three lines on STDOUT, the last one empty.
 #######################################
 settings_item() {
-  printf '  %s  %s%s\n' "$1" "$(pad_right "$2" 26)" "$3"
+  printf '  %s  %s%s\n' "$1" "$(pad_right "$2" 27)" "$3"
   printf '     %s\n\n' "$4"
 }
 

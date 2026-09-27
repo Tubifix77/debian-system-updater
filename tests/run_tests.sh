@@ -43,6 +43,7 @@ has()           { grep -qF -- "$1" <<< "$OUT"; }     # output contains a fixed s
 matches()       { grep -qE -- "$1" <<< "$OUT"; }     # output matches an extended regex
 exit_is()       { [ "$RC" -eq "$1" ]; }
 installed()     { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
+not_in_file()   { ! grep -q -- "$1" "$2"; }
 not_installed() { ! installed "$1"; }
 settings()      { printf '%s\n' "$@" > "$CONF"; }    # settings file for the next run
 
@@ -75,6 +76,17 @@ install -m 0755 "$SCRIPT" /tmp/update_system_nonroot.sh
 su -s /bin/bash nobody -c 'bash /tmp/update_system_nonroot.sh' > /tmp/updater-test-nonroot.log 2>&1 < /dev/null
 RC=$?
 check "a run without root exits 1"                   exit_is 1
+
+# The settings screen needs a terminal: script(1) provides one and types the keys
+rm -f "$CONF"
+RUN_NAME=settings
+printf '2g' | script -qec "bash $SCRIPT --settings --lang=en" /dev/null > /tmp/updater-test-settings.log 2>&1
+RC=$?
+check "--settings in a terminal exits 0"             exit_is 0
+check "--settings: keys 2 and G saved 'install'"     grep -qx 'FIRMWARE_UPDATES=install' "$CONF"
+updater settings-no-tty -- --settings
+check "--settings without a terminal exits 2"        exit_is 2
+rm -f "$CONF"
 
 # Run A: English, fallback date table, both switches off
 settings 'INSTALL_SECURITY_SUPPORT=no' 'FIRMWARE_UPDATES=off' 'DISTRO_INFO_CSV=/nonexistent'
@@ -132,6 +144,21 @@ check "E: exits 1"                                   exit_is 1
 check "E: the report shows the failed source"        matches 'Package sources: +ERROR'
 check "E: the upgrade still ran"                     matches 'Packages upgraded: +[0-9]+'
 check "E: exactly one error counted"                 matches 'Errors: +1 '
+
+# Run F: an interactive run in a terminal; TAB at the end opens the settings
+# screen, 3 switches the security-support check back to its default, G saves
+# and ENTER exits
+settings 'FIRMWARE_UPDATES=off' 'INSTALL_SECURITY_SUPPORT=no'
+RUN_NAME=f
+printf '\t3g\n' | script -qec "bash $SCRIPT --lang=en" /dev/null > /tmp/updater-test-f.log 2>&1
+RC=$?
+OUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/updater-test-f.log)
+check "F: interactive run exits 0"                   exit_is 0
+check "F: the end prompt offers the settings screen" has "Press ENTER to exit or TAB for settings"
+check "F: the change was saved (default, so no line)" not_in_file '^INSTALL_SECURITY_SUPPORT=' "$CONF"
+check "F: the other setting was kept"                grep -qx 'FIRMWARE_UPDATES=off' "$CONF"
+check "F: the settings screen stayed out of the log" not_in_file 'Keys 1-6' /var/log/debian-updater.log
+rm -f "$CONF"
 
 echo "== $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]
