@@ -10,6 +10,7 @@
 #   sudo bash update_system.sh              # interactive, waits for ENTER at the end
 #   sudo bash update_system.sh --auto       # non-interactive, for cron / automation
 #   sudo bash update_system.sh --lang=en    # force the language (da or en)
+#   sudo bash update_system.sh --settings   # settings screen (also: TAB at the end)
 #   bash update_system.sh --help
 #
 # Settings: /etc/default/debian-system-updater (see README.md)
@@ -54,6 +55,10 @@ INSTALL_SECURITY_SUPPORT=${DEFAULT_INSTALL_SECURITY_SUPPORT}   # yes or no
 FIRMWARE_UPDATES=${DEFAULT_FIRMWARE_UPDATES}   # ask (never in --auto), install, check, off
 DISTRO_INFO_CSV="/usr/share/distro-info/debian.csv"   # Debian's release dates
 
+# The terminal the settings screen uses when opened at the end of a run, so its
+# screens stay out of the log (the tests point it elsewhere)
+TTY_DEVICE=/dev/tty
+
 # ─── Output helpers ───────────────────────────────────────────────────────────
 ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
@@ -95,16 +100,18 @@ t() {
 usage() {
   if [[ "${UI_LANG}" == "da" ]]; then
     cat <<'EOT'
-Brug: sudo bash update_system.sh [--auto] [--lang=da|en]
+Brug: sudo bash update_system.sh [--auto] [--lang=da|en] [--settings]
   --auto         ikke-interaktiv (til cron): ingen spørgsmål, ingen ENTER til sidst
   --lang=da|en   sprog for beskederne (standard: systemsproget)
+  --settings     åbn indstillingsskærmen (eller tryk TAB til sidst i en kørsel)
   --help         vis denne hjælp
 EOT
   else
     cat <<'EOT'
-Usage: sudo bash update_system.sh [--auto] [--lang=da|en]
+Usage: sudo bash update_system.sh [--auto] [--lang=da|en] [--settings]
   --auto         non-interactive (for cron): no prompts, no ENTER at the end
   --lang=da|en   language of the messages (default: the system language)
+  --settings     open the settings screen (or press TAB at the end of a run)
   --help         show this help
 EOT
   fi
@@ -130,7 +137,8 @@ detect_language() {
 #######################################
 # Parses the command line.
 # Globals:
-#   AUTO, CLI_LANG (set); UI_LANG (set when --lang comes before --help)
+#   AUTO, CLI_LANG, SETTINGS_ONLY (set); UI_LANG (set when --lang comes
+#   before --help)
 # Arguments:
 #   The script's arguments.
 # Outputs:
@@ -141,9 +149,11 @@ detect_language() {
 parse_options() {
   AUTO=false
   CLI_LANG=""
+  SETTINGS_ONLY=false
   while (( $# > 0 )); do
     case "$1" in
       --auto) AUTO=true ;;
+      --settings) SETTINGS_ONLY=true ;;
       --lang=*) CLI_LANG=${1#--lang=} ;;
       --lang)
         shift
@@ -1250,9 +1260,288 @@ settings_write() {
 }
 
 #######################################
-# Waits for ENTER in interactive runs and exits. tee closes by itself when the
-# script ends (no wait on it: bash keeps one end of the pipe open, so a wait
-# would hang forever).
+# Pads a text with spaces to a width in characters. (printf pads by bytes,
+# which would push the columns out of line after æ, ø and å.)
+# Arguments:
+#   Text, width.
+# Outputs:
+#   The padded text on STDOUT.
+#######################################
+pad_right() {
+  local text=$1 width=$2
+  local gap=$(( width - ${#text} ))
+  if (( gap < 0 )); then
+    gap=0
+  fi
+  printf '%s%*s' "${text}" "${gap}" ''
+}
+
+#######################################
+# Prints one setting: number, name and current value, and under it what the
+# current value does.
+# Arguments:
+#   Number, name, value, explanation.
+# Outputs:
+#   Three lines on STDOUT, the last one empty.
+#######################################
+settings_item() {
+  printf '  %s  %s%s\n' "$1" "$(pad_right "$2" 26)" "$3"
+  printf '     %s\n\n' "$4"
+}
+
+#######################################
+# Draws the settings screen for the given values, in the current language.
+# Globals:
+#   UI_LANG, DETECTED_LANG, UPDATER_VERSION (read)
+# Arguments:
+#   Clear the screen first (true/false), settings file, language ("" =
+#   automatic), firmware mode, install security support (yes/no), warning
+#   days, alarm days, reminder, unsaved changes (true/false).
+# Outputs:
+#   The screen on STDOUT.
+#######################################
+settings_draw() {
+  local clear=$1 file=$2 lang=$3 fw=$4 ss=$5 warn=$6 alarm=$7 note=$8 dirty=$9
+  local system_lang lang_value lang_help fw_value fw_help ss_value ss_help note_value note_help
+  if [[ "${clear}" == true ]]; then
+    printf '\033[H\033[2J'
+  fi
+  if [[ "${DETECTED_LANG}" == "da" ]]; then
+    system_lang=$(t "dansk" "Danish")
+  else
+    system_lang=$(t "engelsk" "English")
+  fi
+  case "${lang}" in
+    da)
+      lang_value=$(t "Dansk" "Danish")
+      lang_help=$(t "Alle beskeder er på dansk." "All messages are in Danish.")
+      ;;
+    en)
+      lang_value=$(t "Engelsk" "English")
+      lang_help=$(t "Alle beskeder er på engelsk." "All messages are in English.")
+      ;;
+    *)
+      lang_value="$(t "Automatisk" "Automatic") (${system_lang})"
+      lang_help=$(t "Følger systemets sprog." "Follows the system language.")
+      ;;
+  esac
+  case "${fw}" in
+    install)
+      fw_value=$(t "Installér automatisk" "Install automatically")
+      fw_help=$(t "Installerer uden at spørge." "Installs without asking.")
+      ;;
+    check)
+      fw_value=$(t "Vis kun opdateringer" "Only show updates")
+      fw_help=$(t "Installerer aldrig, men viser hvad der findes." "Never installs, but shows what is available.")
+      ;;
+    off)
+      fw_value=$(t "Fra" "Off")
+      fw_help=$(t "Springer firmware-trinnet over." "Skips the firmware step.")
+      ;;
+    *)
+      fw_value=$(t "Spørg først (anbefalet)" "Ask first (recommended)")
+      fw_help=$(t "Spørger, før noget installeres." "Asks before anything is installed.")
+      ;;
+  esac
+  if [[ "${ss}" == "no" ]]; then
+    ss_value=$(t "Installér ikke" "Don't install")
+    ss_help=$(t "Trin 8 springes over, hvis pakken mangler." "Step 8 is skipped if the package is missing.")
+  else
+    ss_value=$(t "Installér (anbefalet)" "Install (recommended)")
+    ss_help=$(t "Installerer debian-security-support til trin 8." "Installs debian-security-support for step 8.")
+  fi
+  if [[ -n "${note}" ]]; then
+    note_value=${note}
+    if (( ${#note_value} > 24 )); then
+      note_value="${note_value:0:23}…"
+    fi
+    note_help=$(t "Vises ved advarslerne om supportens slutning." "Shown with the end-of-support warnings.")
+  else
+    note_value=$(t "(standardteksten)" "(the standard text)")
+    note_help=$(t "Vises ved advarslerne. Tom = standardteksten." "Shown with the warnings. Empty = standard text.")
+  fi
+  line
+  echo -e "${CYAN}${BOLD}  $(t "Indstillinger" "Settings")  │  Debian System Updater v${UPDATER_VERSION}${NC}"
+  line
+  echo ""
+  settings_item 1 "$(t "Sprog" "Language")" "${lang_value}" "${lang_help}"
+  settings_item 2 "$(t "Firmware-opdateringer" "Firmware updates")" "${fw_value}" "${fw_help}"
+  settings_item 3 "$(t "Tjek af sikkerhedssupport" "Security-support check")" "${ss_value}" "${ss_help}"
+  settings_item 4 "$(t "Gul advarsel" "Yellow warning")" \
+    "$(t "${warn} dage før slut" "${warn} days before the end")" \
+    "$(t "Uret bliver gult ${warn} dage før slutdatoen." "The clock turns yellow ${warn} days before the end.")"
+  settings_item 5 "$(t "Rød alarm" "Red alarm")" \
+    "$(t "${alarm} dage før slut" "${alarm} days before the end")" \
+    "$(t "Uret bliver rødt ${alarm} dage før slutdatoen." "The clock turns red ${alarm} days before the end.")"
+  settings_item 6 "$(t "Personlig huskeseddel" "Personal reminder")" "${note_value}" "${note_help}"
+  line
+  echo "  $(t "Tast 1-6: skift   G: gem   N: nulstil   A: annullér" \
+               "Keys 1-6: change   S: save   R: reset   Q: cancel")"
+  echo "  $(t "Gemmes i" "Saved to") ${file}"
+  line
+  if [[ "${dirty}" == true ]]; then
+    echo -e "  ${YELLOW}$(t "● Ændringerne er ikke gemt endnu." "● The changes are not saved yet.")${NC}"
+  fi
+}
+
+#######################################
+# The settings screen. Shows the six settings, each with a line saying what
+# the current choice does. The number keys change a setting, G/S saves, N/R
+# resets to the defaults and A/Q cancels (asking first if anything changed);
+# the Danish and the English keys always both work. Keys come from STDIN and
+# the screen goes to STDOUT, so the caller decides where. On a terminal it
+# opens in the alternate screen, like an editor, so the previous screen comes
+# back when it closes.
+# Globals:
+#   CFG_UI_LANG, FIRMWARE_UPDATES, INSTALL_SECURITY_SUPPORT, LTS_WARN_DAYS,
+#   LTS_ALARM_DAYS, LTS_END_NOTE (read; set when saved); DETECTED_LANG,
+#   the DEFAULT_* constants and choice lists (read); UI_LANG (follows the
+#   chosen language while the screen is open; set when saved)
+# Arguments:
+#   The settings file to write (normally CONFIG_FILE).
+# Outputs:
+#   The screen and the result on STDOUT (a failed save on STDERR).
+# Returns:
+#   0 when saved, 1 when nothing was saved.
+#######################################
+settings_screen() {
+  local file=$1
+  local lang=${CFG_UI_LANG} fw=${FIRMWARE_UPDATES} ss=${INSTALL_SECURITY_SUPPORT}
+  local warn=${LTS_WARN_DAYS} alarm=${LTS_ALARM_DAYS} note=${LTS_END_NOTE}
+  local ui_before=${UI_LANG} dirty=false tty=false result=cancelled key answer new_note
+  if [[ -t 1 ]]; then
+    tty=true
+    printf '\033[?1049h'
+  fi
+  while true; do
+    UI_LANG=${lang:-${DETECTED_LANG}}
+    settings_draw "${tty}" "${file}" "${lang}" "${fw}" "${ss}" "${warn}" "${alarm}" "${note}" "${dirty}"
+    if ! IFS= read -rsn1 key; then
+      break
+    fi
+    case "${key}" in
+      1) lang=$(cycle_value "${lang}" "" da en); dirty=true ;;
+      2) fw=$(cycle_value "${fw}" ask install check off); dirty=true ;;
+      3) ss=$(cycle_value "${ss}" yes no); dirty=true ;;
+      4) warn=$(cycle_value "${warn}" "${WARN_DAY_CHOICES[@]}"); dirty=true ;;
+      5) alarm=$(cycle_value "${alarm}" "${ALARM_DAY_CHOICES[@]}"); dirty=true ;;
+      6)
+        echo ""
+        echo "  $(t "Skriv din huskeseddel og tryk ENTER. Tom = standardteksten." \
+                     "Type your reminder and press ENTER. Empty = the standard text.")"
+        if IFS= read -r -e -i "${note}" -p "  > " new_note; then
+          note=${new_note}
+          dirty=true
+        fi
+        ;;
+      n | N | r | R)
+        lang=""
+        fw=${DEFAULT_FIRMWARE_UPDATES}
+        ss=${DEFAULT_INSTALL_SECURITY_SUPPORT}
+        warn=${DEFAULT_LTS_WARN_DAYS}
+        alarm=${DEFAULT_LTS_ALARM_DAYS}
+        note=""
+        dirty=true
+        ;;
+      g | G | s | S)
+        if settings_write "${file}" "${lang}" "${fw}" "${ss}" "${warn}" "${alarm}" "${note}"; then
+          result=saved
+        else
+          result=failed
+        fi
+        break
+        ;;
+      a | A | q | Q)
+        if [[ "${dirty}" != true ]]; then
+          break
+        fi
+        printf '\n  %s ' "$(t "Kassér ændringerne? [j/N]" "Discard the changes? [y/N]")"
+        IFS= read -rsn1 answer || answer=y
+        case "${answer}" in j | J | y | Y) break ;; esac
+        ;;
+    esac
+  done
+  if [[ "${tty}" == true ]]; then
+    printf '\033[?1049l'
+  fi
+  case "${result}" in
+    saved)
+      CFG_UI_LANG=${lang}
+      FIRMWARE_UPDATES=${fw}
+      INSTALL_SECURITY_SUPPORT=${ss}
+      LTS_WARN_DAYS=${warn}
+      LTS_ALARM_DAYS=${alarm}
+      LTS_END_NOTE=${note}
+      UI_LANG=${lang:-${DETECTED_LANG}}
+      ok "$(t "Indstillingerne er gemt i ${file} og bruges fra næste kørsel." \
+              "The settings are saved in ${file} and apply from the next run.")"
+      return 0
+      ;;
+    failed)
+      UI_LANG=${ui_before}
+      fail "$(t "Kunne ikke gemme ${file}." "Could not save ${file}.")"
+      return 1
+      ;;
+    *)
+      UI_LANG=${ui_before}
+      t "Ingen ændringer er gemt." "No changes were saved."
+      echo
+      return 1
+      ;;
+  esac
+}
+
+#######################################
+# The end of an interactive run: ENTER exits, TAB opens the settings screen on
+# the terminal (so its screens stay out of the log) and then asks again.
+# Globals:
+#   CONFIG_FILE, TTY_DEVICE (read)
+# Outputs:
+#   The prompt on STDOUT.
+#######################################
+end_prompt() {
+  local key
+  while true; do
+    printf '%s' "$(t "Tryk ENTER for at afslutte eller TAB for indstillinger..." \
+                     "Press ENTER to exit or TAB for settings...")"
+    if ! IFS= read -rsn1 key; then
+      echo
+      return 0
+    fi
+    echo
+    case "${key}" in
+      "") return 0 ;;
+      $'\t')
+        # shellcheck disable=SC2094  # the terminal is read and written on purpose
+        settings_screen "${CONFIG_FILE}" < "${TTY_DEVICE}" > "${TTY_DEVICE}"
+        ;;
+    esac
+  done
+}
+
+#######################################
+# --settings: opens the settings screen without running any updates.
+# Globals:
+#   CONFIG_FILE (read); LC_ALL (exported, so the columns line up)
+# Outputs:
+#   An error on STDERR without a terminal.
+# Returns:
+#   Exits 0 afterwards, 2 without a terminal.
+#######################################
+run_settings_only() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    fail "$(t "Indstillingsskærmen skal åbnes i en terminal." "The settings screen must be opened in a terminal.")"
+    exit 2
+  fi
+  export LC_ALL=C.UTF-8
+  settings_screen "${CONFIG_FILE}"
+  exit 0
+}
+
+#######################################
+# Waits for ENTER (or TAB for the settings screen) in interactive runs and
+# exits. tee closes by itself when the script ends (no wait on it: bash keeps
+# one end of the pipe open, so a wait would hang forever).
 # Globals:
 #   AUTO, ERRORS (read)
 # Returns:
@@ -1260,7 +1549,7 @@ settings_write() {
 #######################################
 finish() {
   if [[ "${AUTO}" != true ]]; then
-    read -r -p "$(t "Tryk ENTER for at afslutte..." "Press ENTER to exit...")" _
+    end_prompt
   fi
   if (( ERRORS == 0 )); then
     exit 0
@@ -1273,6 +1562,9 @@ main() {
   parse_options "$@"
   require_root
   load_settings
+  if [[ "${SETTINGS_ONLY}" == true ]]; then
+    run_settings_only
+  fi
   detect_release /etc/os-release
   lookup_support_dates
   setup_mode

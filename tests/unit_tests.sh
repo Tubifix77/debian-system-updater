@@ -335,6 +335,86 @@ check "support clock: built-in reminder when none is set" \
   eq "$(clock_note "")" "Plan the move to the next Debian release in good time: https://www.debian.org/releases/"
 check "support clock: your own reminder when set" eq "$(clock_note "My GPU note")" "My GPU note"
 
+# ─── Settings screen ──────────────────────────────────────────────────────────
+# shellcheck disable=SC2030,SC2034  # the sourced settings_screen reads these variables
+run_screen() {   # run_screen KEYS FILE : keys are typed into the screen; prints its return code
+  (
+    UI_LANG=en; DETECTED_LANG=en; CFG_UI_LANG=""; FIRMWARE_UPDATES=ask
+    INSTALL_SECURITY_SUPPORT=yes; LTS_WARN_DAYS=30; LTS_ALARM_DAYS=7; LTS_END_NOTE=""
+    printf '%b' "$1" | settings_screen "$2" > "${WORK}/screen.out" 2>&1
+    echo "$?"
+  )
+}
+screen_file="${WORK}/screen-settings"
+shown() { sed 's/\x1b\[[0-9;]*m//g' "${WORK}/screen.out" | grep -qF -- "$1"; }
+
+rm -f "${screen_file}"
+check "screen: key 2 then G saves" eq "$(run_screen '2g' "${screen_file}")" 0
+check "screen: firmware changed from ask to install" grep -qx 'FIRMWARE_UPDATES=install' "${screen_file}"
+check "screen: confirms where it saved"    shown "The settings are saved in ${screen_file}"
+
+rm -f "${screen_file}"
+run_screen '11s' "${screen_file}" > /dev/null
+check "screen: 1 twice gives English, and S saves too" grep -qx 'UI_LANG=en' "${screen_file}"
+
+rm -f "${screen_file}"
+run_screen '6My GPU only works on Debian 12\ng' "${screen_file}" > /dev/null
+# shellcheck disable=SC2031  # read back in a fresh subshell on purpose
+check "screen: 6 edits the reminder" \
+  eq "$( # shellcheck source=/dev/null
+         . "${screen_file}"; echo "${LTS_END_NOTE}")" "My GPU only works on Debian 12"
+
+printf '%s\n' '# kept' 'UI_LANG=da' 'LTS_WARN_DAYS=90' "LTS_END_NOTE='old'" > "${screen_file}"
+run_screen 'rg' "${screen_file}" > /dev/null
+check "screen: R then G resets everything to the defaults" \
+  eq "$(grep -cE '^(UI_LANG|FIRMWARE_UPDATES|INSTALL_SECURITY_SUPPORT|LTS_WARN_DAYS|LTS_ALARM_DAYS|LTS_END_NOTE)=' "${screen_file}")" 0
+check "screen: reset keeps other lines"    grep -qx '# kept' "${screen_file}"
+
+printf '%s\n' '# untouched' > "${screen_file}"
+before=$(md5sum < "${screen_file}")
+check "screen: cancel after a change returns 1" eq "$(run_screen '2qy' "${screen_file}")" 1
+check "screen: cancel leaves the file alone" eq "$(md5sum < "${screen_file}")" "${before}"
+check "screen: says nothing was saved"     shown "No changes were saved."
+check "screen: no ends the cancel question" eq "$(run_screen '2qng' "${screen_file}")" 0
+check "screen: ...and G still saves"       grep -qx 'FIRMWARE_UPDATES=install' "${screen_file}"
+
+printf '%s\n' '# untouched' > "${screen_file}"
+before=$(md5sum < "${screen_file}")
+check "screen: running out of keys saves nothing" eq "$(run_screen '2' "${screen_file}")" 1
+check "screen: ...and leaves the file alone" eq "$(md5sum < "${screen_file}")" "${before}"
+check "screen: shows the new value"        shown "Install automatically"
+check "screen: explains what it does"      shown "Installs without asking."
+check "screen: marks unsaved changes"      shown "The changes are not saved yet."
+check "screen: no terminal codes when not on a terminal" \
+  eq "$(grep -c $'\033\\[?1049h' "${WORK}/screen.out")" 0
+
+run_screen '1' "${screen_file}" > /dev/null
+check "screen: switches to Danish at once when Danish is chosen" shown "Sprog"
+check "screen: ...and shows the choice in Danish" shown "Dansk"
+
+check "pad_right: counts characters, not bytes" eq "$( LC_ALL=C.UTF-8; pad_right "Rød" 6 )|" "Rød   |"
+
+# shellcheck disable=SC2034,SC2317  # end_prompt calls the stub and reads TTY_DEVICE
+end_prompt_with() {   # end_prompt_with KEYS : end_prompt with a stub settings screen; prints its return code
+  (
+    settings_screen() { echo opened >> "${WORK}/opened"; return 1; }
+    TTY_DEVICE=/dev/null
+    UI_LANG=en
+    printf '%b' "$1" | end_prompt > /dev/null 2>&1
+    echo "$?"
+  )
+}
+rm -f "${WORK}/opened"
+end_result=$(end_prompt_with '\t\n')
+check "end prompt: TAB opens the settings screen" eq "$(grep -c opened "${WORK}/opened" 2>/dev/null)" 1
+check "end prompt: ENTER afterwards exits"  eq "${end_result}" 0
+end_result=$(end_prompt_with '\n')
+check "end prompt: ENTER alone exits without settings" \
+  eq "${end_result}|$(grep -c opened "${WORK}/opened")" "0|1"
+
+check "--settings is recognised" eq "$( ( UI_LANG=en; parse_options --settings; echo "${SETTINGS_ONLY}" ) 2>/dev/null)" true
+check "--help mentions --settings" eq "$( ( UI_LANG=en; parse_options --help ) | grep -c -- '--settings')" 2
+
 # ─── Layout ───────────────────────────────────────────────────────────────────
 # The lines above and below the titles must reach past the longest title with a
 # margin of at least 3 characters. ASCII "|" stands in for "│" so that the
