@@ -1,5 +1,5 @@
 #!/bin/bash
-# Debian System Updater v1.4
+# Debian System Updater v1.5
 # Complete maintenance of Debian 12 and 13 with coloured output, a log and a final report.
 # The script detects the Debian release and the language (Danish or English) by itself.
 #
@@ -11,18 +11,22 @@
 #
 # Changes: see CHANGELOG.md
 
-# ─── Settings ─────────────────────────────────────────────────────────────────
+# ─── Settings (override any of them in CONFIG_FILE below) ─────────────────────
 LOG_FILE="/var/log/debian-updater.log"
 LOG_MAX_BYTES=5242880   # rotate the log (to .1) when it exceeds 5 MB
 LTS_WARN_DAYS=30        # yellow warning at this many days left (or fewer)
 LTS_ALARM_DAYS=7        # red alarm at this many days left (or fewer)
 LTS_END_NOTE=""         # your own reminder next to the warnings (empty = built-in text)
 UI_LANG=""              # da or en (empty = follow the system language)
+INSTALL_SECURITY_SUPPORT=yes   # yes: install debian-security-support if missing (for step 8); no: skip
+FIRMWARE_UPDATES=ask    # ask: ask before installing (never in --auto); install: without asking;
+                        # check: only report; off: skip the firmware step
+DISTRO_INFO_CSV="/usr/share/distro-info/debian.csv"   # Debian's release dates (package distro-info-data)
 
-# Support dates per Debian release. Add a line when a new release comes out.
+# Fallback support dates, used when distro-info-data is not installed.
 # Sources: https://www.debian.org/releases/<codename>/ and https://wiki.debian.org/LTS
-# (for bookworm the release page says full support until 2026-07-11, while the LTS
-#  wiki gives LTS from 2026-06-11; the end date 2028-06-30 is the same in both).
+# (distro-info-data and the release pages give full support for bookworm until
+#  2026-07-11; the LTS wiki gives LTS from 2026-06-11; all agree on 2028-06-30).
 #   version  codename   full support until   LTS until
 DEBIAN_RELEASES="
 12 bookworm 2026-07-11 2028-06-30
@@ -96,28 +100,48 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# ─── Which Debian release? ────────────────────────────────────────────────────
-# Read in a subshell so os-release cannot overwrite the script's own variables.
-IFS='|' read -r OS_ID OS_VERSION_ID OS_PRETTY < <(
-    . /etc/os-release 2>/dev/null
-    printf '%s|%s|%s\n' "${ID:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}"
-)
-RELEASE_KNOWN=false; REGULAR_END=""; LTS_END=""
-if [ "$OS_ID" = "debian" ]; then
-    REL_LINE=$(awk -v v="$OS_VERSION_ID" '$1 == v' <<< "$DEBIAN_RELEASES")
-    if [ -n "$REL_LINE" ]; then
-        read -r _ _ REGULAR_END LTS_END <<< "$REL_LINE"
-    fi
-fi
-# Personal settings are read last so they can override everything above
-# (including REGULAR_END and LTS_END for a release that is not in the table).
-# A --lang option still wins over UI_LANG from the file.
+# ─── Personal settings ────────────────────────────────────────────────────────
+# The settings file can override everything above, and can even set REGULAR_END
+# and LTS_END for a release nothing else knows. A --lang option still wins over
+# UI_LANG from the file. Invalid values fall back to the defaults.
+REGULAR_END=""; LTS_END=""
 # shellcheck source=/dev/null
 [ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 [ -n "$CLI_LANG" ] && UI_LANG=$CLI_LANG
 case "$UI_LANG" in da|en) ;; *) UI_LANG=$DETECTED_LANG ;; esac
-[ -n "$LTS_END" ] && RELEASE_KNOWN=true
+case "$INSTALL_SECURITY_SUPPORT" in yes|no) ;; *) INSTALL_SECURITY_SUPPORT=yes ;; esac
+case "$FIRMWARE_UPDATES" in ask|install|check|off) ;; *) FIRMWARE_UPDATES=ask ;; esac
+
+# ─── Which Debian release, and how long is it supported? ─────────────────────
+# os-release is read in a subshell so it cannot overwrite the script's variables.
+IFS='|' read -r OS_ID OS_VERSION_ID OS_PRETTY < <(
+    . /etc/os-release 2>/dev/null
+    printf '%s|%s|%s\n' "${ID:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}"
+)
 OS_PRETTY=${OS_PRETTY:-$(L "ukendt system" "unknown system")}
+# Support dates: the settings file wins, then Debian's own distro-info-data
+# (columns found by header name), then the fallback table above.
+DATE_SOURCE=""
+if [ -n "$LTS_END" ]; then
+    DATE_SOURCE=$(L "indstillingsfilen" "the settings file")
+elif [ "$OS_ID" = "debian" ] && [ -n "$OS_VERSION_ID" ]; then
+    if [ -r "$DISTRO_INFO_CSV" ]; then
+        IFS='|' read -r REGULAR_END LTS_END < <(awk -F, -v v="$OS_VERSION_ID" '
+            NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+            col["version"] && col["eol"] && col["eol-lts"] && $col["version"] == v {
+                print $col["eol"] "|" $col["eol-lts"]; exit }' "$DISTRO_INFO_CSV")
+        [ -n "$LTS_END" ] && DATE_SOURCE="distro-info-data ($DISTRO_INFO_CSV)"
+    fi
+    if [ -z "$LTS_END" ]; then
+        REL_LINE=$(awk -v v="$OS_VERSION_ID" '$1 == v' <<< "$DEBIAN_RELEASES")
+        if [ -n "$REL_LINE" ]; then
+            read -r _ _ REGULAR_END LTS_END <<< "$REL_LINE"
+            DATE_SOURCE=$(L "scriptets indbyggede tabel" "the script's built-in table")
+        fi
+    fi
+fi
+RELEASE_KNOWN=false
+[ -n "$LTS_END" ] && RELEASE_KNOWN=true
 [ -z "$LTS_END_NOTE" ] && LTS_END_NOTE=$(L "Planlæg skiftet til den næste Debian-udgave i god tid: https://www.debian.org/releases/" \
                                             "Plan the move to the next Debian release in good time: https://www.debian.org/releases/")
 
@@ -165,7 +189,7 @@ UU_STATUS=$(L "ikke aktiv" "not active")
 # ─── Header ───────────────────────────────────────────────────────────────────
 echo ""
 line
-echo -e "${CYAN}${BOLD}  Debian System Updater v1.4  │  ${START_TIME}    ${NC}"
+echo -e "${CYAN}${BOLD}  Debian System Updater v1.5  │  ${START_TIME}    ${NC}"
 echo -e "${CYAN}${BOLD}  ${OS_PRETTY}${NC}"
 line
 echo ""
@@ -313,7 +337,11 @@ step "$(L "[7/8] Firmware-opdateringer (fwupd)..." "[7/8] Firmware updates (fwup
 # has ConditionVirtualization=!container); the firmware belongs to the host.
 # Same test systemd uses; otherwise fwupdmgr waits 25 seconds in vain.
 FW_CONTAINER=$(systemd-detect-virt --container 2>/dev/null)
-if command -v fwupdmgr &> /dev/null && [ -n "$FW_CONTAINER" ] && [ "$FW_CONTAINER" != "none" ]; then
+if [ "$FIRMWARE_UPDATES" = "off" ]; then
+    L "Firmware-trinnet er slået fra (FIRMWARE_UPDATES=off i indstillingsfilen)." \
+      "The firmware step is switched off (FIRMWARE_UPDATES=off in the settings file)."; echo
+    FIRMWARE_STATUS=$(L "slået fra" "switched off")
+elif command -v fwupdmgr &> /dev/null && [ -n "$FW_CONTAINER" ] && [ "$FW_CONTAINER" != "none" ]; then
     L "Kører i en container ($FW_CONTAINER) — firmware opdateres på værtsmaskinen. Springer over." \
       "Running in a container ($FW_CONTAINER); firmware is updated on the host. Skipping."; echo
     FIRMWARE_STATUS=$(L "sprunget over (container: $FW_CONTAINER)" "skipped (container: $FW_CONTAINER)")
@@ -321,11 +349,11 @@ elif command -v fwupdmgr &> /dev/null; then
     # --no-unreported-check: never send reports to LVFS on its own
     # --no-metadata-check:   metadata is refreshed explicitly right below
     # --no-reboot-check:     never ask for or start a reboot; the report says so
-    # fwupdmgr uses exit code 2 for "nothing to do"; that is not an error.
     FW_FLAGS=(-y --no-unreported-check --no-metadata-check)
     FW_NOTE=""
     # Metadata (which firmware versions exist) comes from LVFS. Debian's
     # fwupd-refresh.timer also does this daily, but hides errors; here they show.
+    # fwupdmgr uses exit code 2 for "nothing to do"; that is not an error.
     fwupdmgr refresh "${FW_FLAGS[@]}" 2>&1 | tee "$TMP/fw_refresh.txt"
     FW_REFRESH_RC=${PIPESTATUS[0]}
     if [ "$FW_REFRESH_RC" -ne 0 ] && [ "$FW_REFRESH_RC" -ne 2 ]; then
@@ -333,51 +361,88 @@ elif command -v fwupdmgr &> /dev/null; then
                   "Firmware metadata from LVFS could not be fetched (code $FW_REFRESH_RC). Checking with the data already present.")"
         FW_NOTE=$(L " (metadata kunne ikke hentes — se log)" " (metadata could not be fetched, see log)"); ((ERRORS++))
     fi
-    # Full output goes to a temp file; the screen shows one line per device.
-    # (fwupd colours its text even in files; the colour codes are removed before parsing)
-    fwupdmgr get-updates "${FW_FLAGS[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$TMP/fw.txt"
-    FW_RC=${PIPESTATUS[0]}
-    case "$FW_RC" in
-        0)  # at least one device has an update on LVFS
-            # Hardware check: is Secure Boot on? Updates to the Secure Boot lists
-            # (db/dbx) mean nothing while Secure Boot is off, and on older machines
-            # they often cannot be installed (too little space in the UEFI variable store).
-            SB_STATE="unknown"
-            SB_VAR=$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -1)
-            if [ -n "$SB_VAR" ]; then
-                case "$(od -An -tu1 -j4 -N1 "$SB_VAR" 2>/dev/null | tr -d ' ')" in
-                    1) SB_STATE="on" ;;
-                    0) SB_STATE="off" ;;
-                esac
-            fi
-            # One line per device: name, current version, new version, any rejection by the firmware
-            awk '
-                function flush() { if (name != "") printf "%s\t%s\t%s\t%s\n", name, cur, new, err }
-                /^[│ ]*[├└]─[^:]+:$/ { hdr = $0; sub(/^[│ ]*[├└]─/, "", hdr); sub(/:$/, "", hdr); next }
-                /Device ID:/       { flush(); name = hdr; cur = ""; new = ""; err = ""; next }
-                /Current version:/ { if (name != "" && cur == "") { cur = $0; sub(/.*Current version: */, "", cur) }; next }
-                /New version:/     { if (name != "" && new == "") { new = $0; sub(/.*New version: */, "", new) }; next }
-                /Update Error:/    { if (name != "") { err = $0; sub(/.*Update Error: */, "", err) }; next }
-                END { flush() }
-            ' "$TMP/fw.txt" > "$TMP/fw_devices.tsv"
-            FW_DEVICES=$(grep -c . "$TMP/fw_devices.tsv")
-            FW_BLOCKED=$(awk -F'\t' '$4 != ""' "$TMP/fw_devices.tsv" | wc -l)
-            FW_BLOCKED_SB=$(awk -F'\t' '$4 != "" && $1 ~ /UEFI dbx|UEFI CA|UEFI db|KEK|PCA|Signature Database/' "$TMP/fw_devices.tsv" | wc -l)
-            FW_READY=$((FW_DEVICES - FW_BLOCKED))
-            FW_REASON=$(awk -F'\t' '$4 != "" {print $4}' "$TMP/fw_devices.tsv" | sed 's/,.*//' | sort -u | paste -sd ';')
-            awk -F'\t' -v rej="$(L "afvist af firmwaren" "rejected by the firmware")" '
-                { line = "  • " $1 ": " ($2 == "" ? "?" : $2) " → " ($3 == "" ? "?" : $3)
-                  if ($4 != "") line = line "  (" rej ": " $4 ")"
-                  print line }' "$TMP/fw_devices.tsv"
-            FIRMWARE_STATUS=""
-            if [ "$FW_DEVICES" -eq 0 ]; then
-                cat "$TMP/fw.txt"
-                FIRMWARE_STATUS=$(L "opdateringer fundet, men output kunne ikke tolkes — se log" \
-                                    "updates found, but the output could not be parsed (see log)")
-                warn "$FIRMWARE_STATUS"
-            fi
-            # Only install what the firmware will actually accept
-            if [ "$FW_READY" -gt 0 ]; then
+    # Which devices have updates? fwupdmgr's manual points to --json for parsing;
+    # with --json an empty device list means "no updates" and the exit code is 0.
+    # python3 turns the JSON into one line per device:
+    #   name <TAB> current version <TAB> new version <TAB> rejection reason <TAB> plugin
+    fw_summarise() {
+        python3 - "$1" <<'PYEOF'
+import json, sys
+
+def clean(value):
+    return str(value or "").replace("\t", " ").replace("\n", " ")
+
+with open(sys.argv[1]) as handle:
+    data = json.load(handle)
+for device in data.get("Devices", []):
+    releases = device.get("Releases") or []
+    if releases:
+        fields = (device.get("Name"), device.get("Version"), releases[0].get("Version"),
+                  device.get("UpdateError"), device.get("Plugin"))
+        print("\t".join(clean(field) for field in fields))
+PYEOF
+    }
+    fwupdmgr get-updates --json "${FW_FLAGS[@]}" > "$TMP/fw.json" 2> "$TMP/fw.err"
+    FW_RC=$?
+    [ -s "$TMP/fw.err" ] && sed 's/\x1b\[[0-9;]*m//g' "$TMP/fw.err"
+    FW_SUMMARY=false
+    if [ "$FW_RC" -eq 0 ] && command -v python3 &> /dev/null \
+       && fw_summarise "$TMP/fw.json" > "$TMP/fw_devices.tsv" 2> /dev/null; then
+        FW_SUMMARY=true
+    fi
+    if [ "$FW_RC" -ne 0 ] && [ "$FW_RC" -ne 2 ]; then
+        FIRMWARE_STATUS=$(L "FEJL (kode $FW_RC)" "ERROR (code $FW_RC)")
+        warn "$(L "fwupdmgr get-updates fejlede (kode $FW_RC)." "fwupdmgr get-updates failed (code $FW_RC).")"; ((ERRORS++))
+    elif [ "$FW_RC" -eq 0 ] && ! $FW_SUMMARY; then
+        # No python3 (or unexpected JSON): show fwupd's own text and never install blind
+        fwupdmgr get-updates "${FW_FLAGS[@]}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+        if [ "${PIPESTATUS[0]}" -eq 2 ]; then
+            FIRMWARE_STATUS="$(L "ingen opdateringer tilgængelige" "no updates available")${FW_NOTE}"
+            ok "$(L "Firmware er ajour" "Firmware is up to date")"
+        else
+            FIRMWARE_STATUS=$(L "opdateringer fundet, men de kan ikke opsummeres uden python3 — installér med: sudo fwupdmgr update" \
+                                "updates found, but they cannot be summarised without python3 — install with: sudo fwupdmgr update")
+            warn "$FIRMWARE_STATUS"
+        fi
+    elif [ ! -s "$TMP/fw_devices.tsv" ]; then
+        FIRMWARE_STATUS="$(L "ingen opdateringer tilgængelige" "no updates available")${FW_NOTE}"
+        ok "$(L "Firmware er ajour" "Firmware is up to date")"
+    else
+        # Hardware check: is Secure Boot on? Updates to the Secure Boot lists
+        # (db/dbx) mean nothing while Secure Boot is off, and on older machines
+        # they often cannot be installed (too little space in the UEFI variable store).
+        SB_STATE="unknown"
+        SB_VAR=$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -1)
+        if [ -n "$SB_VAR" ]; then
+            case "$(od -An -tu1 -j4 -N1 "$SB_VAR" 2>/dev/null | tr -d ' ')" in
+                1) SB_STATE="on" ;;
+                0) SB_STATE="off" ;;
+            esac
+        fi
+        FW_DEVICES=$(grep -c . "$TMP/fw_devices.tsv")
+        FW_BLOCKED=$(awk -F'\t' '$4 != ""' "$TMP/fw_devices.tsv" | wc -l)
+        # The Secure Boot lists are the devices of fwupd's uefi_db/dbx/kek/pk plugins
+        FW_BLOCKED_SB=$(awk -F'\t' '$4 != "" && $5 ~ /^uefi_(db|dbx|kek|pk)$/' "$TMP/fw_devices.tsv" | wc -l)
+        FW_READY=$((FW_DEVICES - FW_BLOCKED))
+        FW_REASON=$(awk -F'\t' '$4 != "" {print $4}' "$TMP/fw_devices.tsv" | sed 's/,.*//' | sort -u | paste -sd ';')
+        awk -F'\t' -v rej="$(L "afvist af firmwaren" "rejected by the firmware")" '
+            { line = "  • " $1 ": " ($2 == "" ? "?" : $2) " → " ($3 == "" ? "?" : $3)
+              if ($4 != "") line = line "  (" rej ": " $4 ")"
+              print line }' "$TMP/fw_devices.tsv"
+        FIRMWARE_STATUS=""
+        # Updates the firmware accepts: install, ask first, or only report (FIRMWARE_UPDATES)
+        if [ "$FW_READY" -gt 0 ]; then
+            FW_INSTALL=false
+            case "$FIRMWARE_UPDATES" in
+                install) FW_INSTALL=true ;;
+                ask)
+                    if ! $AUTO && [ -t 0 ]; then
+                        read -r -p "$(L "Installér $FW_READY firmware-opdatering(er) nu? [j/N] " \
+                                        "Install $FW_READY firmware update(s) now? [y/N] ")" FW_ANSWER
+                        case "$FW_ANSWER" in [jJyY]*) FW_INSTALL=true ;; esac
+                    fi ;;
+            esac
+            if $FW_INSTALL; then
                 fwupdmgr update "${FW_FLAGS[@]}" --no-reboot-check 2>&1 | tee "$TMP/fw_update.txt"
                 FW_UPD_RC=${PIPESTATUS[0]}
                 if grep -q 'Successfully installed firmware' "$TMP/fw_update.txt"; then
@@ -392,35 +457,34 @@ elif command -v fwupdmgr &> /dev/null; then
                     FIRMWARE_STATUS=$(L "FEJL ved opdatering (kode $FW_UPD_RC)" "ERROR during update (code $FW_UPD_RC)")
                     fail "$(L "Firmware-opdatering fejlede (kode $FW_UPD_RC)." "Firmware update failed (code $FW_UPD_RC).")"; ((ERRORS++))
                 fi
+            else
+                FIRMWARE_STATUS=$(L "$FW_READY enhed(er) kan opdateres — installér med: sudo fwupdmgr update" \
+                                    "$FW_READY device(s) can be updated — install with: sudo fwupdmgr update")
+                warn "$FIRMWARE_STATUS"
             fi
-            # Devices the firmware rejects
-            if [ "$FW_BLOCKED" -gt 0 ]; then
-                if [ "$FW_BLOCKED_SB" -eq "$FW_BLOCKED" ] && [ "$SB_STATE" = "off" ]; then
-                    FW_BLOCKED_NOTE=$(L "ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)" \
-                                        "none relevant (Secure Boot lists cannot be updated, and Secure Boot is off)")
-                    L "  Secure Boot er slået fra på denne maskine, så de manglende db/dbx-opdateringer er uden betydning." \
-                      "  Secure Boot is off on this machine, so the missing db/dbx updates do not matter."; echo
-                    ok "$(L "Firmware tjekket" "Firmware checked")"
-                else
-                    FW_BLOCKED_NOTE=$(L "$FW_BLOCKED enhed(er) kan ikke opdateres: ${FW_REASON:-se log}" \
-                                        "$FW_BLOCKED device(s) cannot be updated: ${FW_REASON:-see log}")
-                    if [ "$FW_BLOCKED_SB" -gt 0 ] && [ "$SB_STATE" = "on" ]; then
-                        FW_BLOCKED_NOTE="$FW_BLOCKED_NOTE$(L " — Secure Boot er slået TIL, så det bør undersøges" \
-                                                             " — Secure Boot is ON, so this should be looked into")"
-                    fi
-                    warn "$FW_BLOCKED_NOTE"
+        fi
+        # Updates the firmware rejects
+        if [ "$FW_BLOCKED" -gt 0 ]; then
+            if [ "$FW_BLOCKED_SB" -eq "$FW_BLOCKED" ] && [ "$SB_STATE" = "off" ]; then
+                FW_BLOCKED_NOTE=$(L "ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)" \
+                                    "none relevant (Secure Boot lists cannot be updated, and Secure Boot is off)")
+                L "  Secure Boot er slået fra på denne maskine, så de manglende db/dbx-opdateringer er uden betydning." \
+                  "  Secure Boot is off on this machine, so the missing db/dbx updates do not matter."; echo
+                ok "$(L "Firmware tjekket" "Firmware checked")"
+            else
+                FW_BLOCKED_NOTE=$(L "$FW_BLOCKED enhed(er) kan ikke opdateres: ${FW_REASON:-se log}" \
+                                    "$FW_BLOCKED device(s) cannot be updated: ${FW_REASON:-see log}")
+                if [ "$FW_BLOCKED_SB" -gt 0 ] && [ "$SB_STATE" = "on" ]; then
+                    FW_BLOCKED_NOTE="$FW_BLOCKED_NOTE$(L " — Secure Boot er slået TIL, så det bør undersøges" \
+                                                         " — Secure Boot is ON, so this should be looked into")"
                 fi
-                FIRMWARE_STATUS="${FIRMWARE_STATUS:+$FIRMWARE_STATUS; }$FW_BLOCKED_NOTE"
+                warn "$FW_BLOCKED_NOTE"
             fi
-            [ -z "$FIRMWARE_STATUS" ] && FIRMWARE_STATUS=$(L "ingen opdateringer tilgængelige" "no updates available")
-            FIRMWARE_STATUS="$FIRMWARE_STATUS$FW_NOTE" ;;
-        2)
-            FIRMWARE_STATUS="$(L "ingen opdateringer tilgængelige" "no updates available")${FW_NOTE}"
-            ok "$(L "Firmware er ajour" "Firmware is up to date")" ;;
-        *)
-            FIRMWARE_STATUS=$(L "FEJL (kode $FW_RC)" "ERROR (code $FW_RC)")
-            warn "$(L "fwupdmgr get-updates fejlede (kode $FW_RC)." "fwupdmgr get-updates failed (code $FW_RC).")"; ((ERRORS++)) ;;
-    esac
+            FIRMWARE_STATUS="${FIRMWARE_STATUS:+$FIRMWARE_STATUS; }$FW_BLOCKED_NOTE"
+        fi
+        [ -z "$FIRMWARE_STATUS" ] && FIRMWARE_STATUS=$(L "ingen opdateringer tilgængelige" "no updates available")
+        FIRMWARE_STATUS="$FIRMWARE_STATUS$FW_NOTE"
+    fi
 else
     L "fwupd er ikke installeret — springer over.  (Installér med: sudo apt-get install fwupd)" \
       "fwupd is not installed. Skipping.  (Install with: sudo apt-get install fwupd)"; echo
@@ -435,11 +499,16 @@ if [ "$OS_ID" != "debian" ]; then
     L "Ikke et Debian-system — springer over." "Not a Debian system. Skipping."; echo
     SUPPORT_STATUS=$(L "sprunget over (ikke Debian)" "skipped (not Debian)")
 elif ! dpkg-query -W -f='${Status}' debian-security-support 2>/dev/null | grep -q "install ok installed"; then
-    L "Installerer debian-security-support (viser pakker uden sikkerhedssupport)..." \
-      "Installing debian-security-support (shows packages without security support)..."; echo
-    apt-get "${APT_OPTS[@]}" install -y debian-security-support 2>&1 || {
-        warn "$(L "Kunne ikke installere debian-security-support." "Could not install debian-security-support.")"; ((ERRORS++))
-    }
+    if [ "$INSTALL_SECURITY_SUPPORT" = yes ]; then
+        L "Installerer debian-security-support (viser pakker uden sikkerhedssupport; slå fra med INSTALL_SECURITY_SUPPORT=no)..." \
+          "Installing debian-security-support (shows packages without security support; switch off with INSTALL_SECURITY_SUPPORT=no)..."; echo
+        apt-get "${APT_OPTS[@]}" install -y debian-security-support 2>&1 || {
+            warn "$(L "Kunne ikke installere debian-security-support." "Could not install debian-security-support.")"; ((ERRORS++))
+        }
+    else
+        L "debian-security-support er ikke installeret (INSTALL_SECURITY_SUPPORT=no) — springer over." \
+          "debian-security-support is not installed (INSTALL_SECURITY_SUPPORT=no). Skipping."; echo
+    fi
 fi
 if [ "$OS_ID" != "debian" ]; then
     :
@@ -482,6 +551,8 @@ elif command -v check-support-status &> /dev/null; then
         SUPPORT_STATUS=$(L "alle installerede pakker er dækket" "all installed packages are covered")
         ok "$SUPPORT_STATUS"
     fi
+elif [ "$INSTALL_SECURITY_SUPPORT" = no ]; then
+    SUPPORT_STATUS=$(L "ikke installeret (INSTALL_SECURITY_SUPPORT=no)" "not installed (INSTALL_SECURITY_SUPPORT=no)")
 else
     SUPPORT_STATUS=$(L "ukendt (debian-security-support mangler)" "unknown (debian-security-support missing)")
 fi
@@ -615,6 +686,9 @@ elif [ "$REGULAR_DAYS_LEFT" -ge 0 ]; then
     fi
 else
     echo -e "  🗓  ${VER_LABEL} LTS: $(L "sikkerhedsopdateringer til ${LTS_END}" "security updates until ${LTS_END}") — ${BOLD}${LTS_DAYS_LEFT} $(L "dage tilbage" "days left")${NC}"
+fi
+if $RELEASE_KNOWN && [ -n "$DATE_SOURCE" ]; then
+    echo "     $(L "Datoer fra" "Dates from"): $DATE_SOURCE"
 fi
 
 # ─── Reboot warning ───────────────────────────────────────────────────────────

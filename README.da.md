@@ -1,5 +1,7 @@
 # debian-system-updater
 
+[![CI](https://github.com/Tubifix77/debian-system-updater/actions/workflows/ci.yml/badge.svg)](https://github.com/Tubifix77/debian-system-updater/actions/workflows/ci.yml)
+
 🇬🇧 [English version](README.md)
 
 Et enkelt Bash-script til komplet vedligeholdelse af Debian 12 og Debian 13 — et "Windows Update"-alternativ til Debian.
@@ -17,9 +19,9 @@ Scriptet fortæller også de ting, Debian ellers holder for sig selv: hvilke pak
 | Debian 12 "bookworm" | 2026-07-11 | 2028-06-30 | apt 2.6 |
 | Debian 13 "trixie" | 2028-08-09 | 2030-06-30 | apt 3.0 |
 
-Det er det samme script på begge udgaver. Det læser `/etc/os-release` og slår datoerne op i en lille tabel (`DEBIAN_RELEASES`) øverst i scriptet. Når en ny udgave kommer, er det én linje at tilføje. På en udgave, der ikke står i tabellen, kører alt andet som normalt; kun support-uret mangler.
+Det er det samme script på begge udgaver. Det læser `/etc/os-release` og henter supportdatoerne fra Debians egen pakke `distro-info-data` (`/usr/share/distro-info/debian.csv`), når den er installeret, så nye Debian-udgaver virker uden at ændre scriptet. Uden den pakke bruger det en lille indbygget tabel (`DEBIAN_RELEASES`). På en udgave, ingen af dem kender, kører alt andet som normalt; kun support-uret mangler.
 
-Datoerne kommer fra [debian.org/releases](https://www.debian.org/releases/) og [wiki.debian.org/LTS](https://wiki.debian.org/LTS). For bookworm siger udgivelsessiden fuld support til 2026-07-11, mens LTS-wikien angiver LTS fra 2026-06-11. Slutdatoen 2028-06-30 er den samme begge steder.
+Datoerne i tabellen ovenfor kommer fra `distro-info-data`, [debian.org/releases](https://www.debian.org/releases/) og [wiki.debian.org/LTS](https://wiki.debian.org/LTS). For bookworm angiver LTS-wikien LTS fra 2026-06-11, mens udgivelsessiden og `distro-info-data` angiver fuld support til 2026-07-11. Alle er enige om slutdatoen 2028-06-30.
 
 ## Sprog
 
@@ -34,8 +36,8 @@ Beskederne er på dansk, når systemsproget er dansk (`LANG=da_*`), og ellers p�
 4. **flatpak update** — opdaterer Flatpak-apps og -runtimes, hvis Flatpak er installeret
 5. **apt-get autoremove --purge** — fjerner ubrugte pakker og deres konfiguration
 6. **apt-get clean** — rydder op i downloadede .deb-filer
-7. **Firmware** — henter LVFS-metadata og anvender firmware-opdateringer via `fwupdmgr`, hvis fwupd er installeret. Genstarter aldrig af sig selv og sender ingen rapporter til LVFS. Springes over i containere (WSL, Docker, LXC).
-8. **Sikkerhedsstatus** — installerer `debian-security-support` (én gang) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
+7. **Firmware** — henter LVFS-metadata og tjekker for firmware-opdateringer via `fwupdmgr`, hvis fwupd er installeret. Som standard spørger det, før noget installeres (se `FIRMWARE_UPDATES` nedenfor). Genstarter aldrig af sig selv og sender ingen rapporter til LVFS. Springes over i containere (WSL, Docker, LXC).
+8. **Sikkerhedsstatus** — installerer `debian-security-support` én gang (medmindre `INSTALL_SECURITY_SUPPORT=no`) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
 9. **Rapport** — oversigt over alt ovenstående, support-ur, genstart-advarsel og sti til logfilen
 
 ## Brug
@@ -68,14 +70,24 @@ Uden dette kan en cron-kørsel hænge for evigt på et spørgsmål, ingen ser.
 
 ## Egne indstillinger
 
-Vil du ændre advarselsgrænserne, sproget eller skrive din egen huskeseddel til support-uret, så læg dem i `/etc/default/debian-system-updater`. Filen er valgfri, og den overskrives ikke, når du henter en ny version af scriptet. Eksempel:
+Indstillinger lægges i `/etc/default/debian-system-updater`. Filen er valgfri, og den overskrives ikke, når du henter en ny version af scriptet. Alle linjer er valgfrie:
 
 ```bash
 # /etc/default/debian-system-updater
-UI_LANG=da
-LTS_WARN_DAYS=60
+UI_LANG=da                    # da eller en (standard: systemsproget)
+LTS_WARN_DAYS=60              # gul advarsel så mange dage før slutdatoen (standard 30)
+LTS_ALARM_DAYS=7              # rød alarm så mange dage før slutdatoen (standard 7)
 LTS_END_NOTE="Det gamle NVIDIA-kort virker kun med Debian 12. Plan: nyt grafikkort eller ny pc."
+INSTALL_SECURITY_SUPPORT=no   # installér ikke debian-security-support (standard yes)
+FIRMWARE_UPDATES=check        # ask, install, check eller off (standard ask)
 ```
+
+`FIRMWARE_UPDATES` bestemmer, hvad der sker, når firmwaren vil tage imod en opdatering:
+
+- `ask` — en interaktiv kørsel spørger, før der installeres; en `--auto`-kørsel viser det kun, fordi ingen kan svare
+- `install` — installerer uden at spørge, også i `--auto`-kørsler
+- `check` — installerer aldrig, viser kun hvad der findes, og hvordan det installeres
+- `off` — springer firmware-trinnet over
 
 ## Eksempel på slutrapport
 
@@ -83,7 +95,7 @@ Fra en kørsel på en Debian 12-bærbar:
 
 ```
 ══════════════════════════════════════════════════
-  RAPPORT  │  2026-09-27 15:17:50  │  varighed 0m 12s
+  RAPPORT  │  2026-09-27 15:42:04  │  varighed 0m 12s
 ══════════════════════════════════════════════════
   Pakkekilder:                     OK
   Pakker opgraderet:               0
@@ -101,6 +113,7 @@ Fra en kørsel på en Debian 12-bærbar:
 ══════════════════════════════════════════════════
 
   🗓  Debian 12 LTS: sikkerhedsopdateringer til 2028-06-30 — 641 dage tilbage
+     Datoer fra: distro-info-data (/usr/share/distro-info/debian.csv)
 
   📋 Fuld log: /var/log/debian-updater.log
 ```
@@ -121,7 +134,7 @@ Linjerne betyder:
 
 ## Support-uret
 
-Nederst i rapporten står, hvor længe din Debian-udgave får sikkerhedsopdateringer. Så længe udgaven har fuld support, vises begge datoer; i LTS-perioden kun slutdatoen. En måned før overgangen til LTS kommer en gul note, fordi LTS ikke dækker alle pakker (trin 8 viser hvilke).
+Nederst i rapporten står, hvor længe din Debian-udgave får sikkerhedsopdateringer. Så længe udgaven har fuld support, vises begge datoer; i LTS-perioden kun slutdatoen. En måned før overgangen til LTS kommer en gul note, fordi LTS ikke dækker alle pakker (trin 8 viser hvilke). Linjen under uret fortæller, hvor datoerne kommer fra: `distro-info-data`, den indbyggede tabel eller din indstillingsfil.
 
 Advarslerne tæller ned mod slutdatoen: gul ved 30 dage eller færre (`LTS_WARN_DAYS`), rød ved 7 dage eller færre (`LTS_ALARM_DAYS`) og efter datoen. Begge grænser og huskesedlen `LTS_END_NOTE` kan sættes i din egen indstillingsfil.
 
@@ -144,6 +157,16 @@ tail -100 /var/log/debian-updater.log
 I en container (WSL, Docker, LXC) springes firmware-trinnet over, fordi firmwaren tilhører værtsmaskinen, og fwupd-tjenesten starter slet ikke der.
 
 Bruger du et program-firewall som OpenSnitch, skal `/usr/bin/fwupdmgr` have lov til at gå på nettet, ellers kan firmware-metadata ikke hentes. Scriptet viser det som en advarsel i rapporten.
+
+## Udvikling og test
+
+Hvert push kører [CI-workflowet](.github/workflows/ci.yml): ShellCheck og integrationstestene i `tests/run_tests.sh` i rene Debian 12- og Debian 13-containere. Testene kører det rigtige script i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde og håndteringen af tilvalg.
+
+Testene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:
+
+```bash
+docker run --rm -v "$PWD:/src" -w /src -e UPDATER_TESTS=1 debian:trixie bash tests/run_tests.sh
+```
 
 ## Licens
 

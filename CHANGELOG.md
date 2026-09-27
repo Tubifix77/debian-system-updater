@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.5.0 — 2026-09-27
+
+### Added
+- **Automated tests and CI.** `tests/run_tests.sh` runs the real script in several scenarios: English and Danish, the fallback table and `distro-info-data` dates, settings-file overrides, the warning and "support ended" branches, an unreachable package source, option handling and the root check. GitHub Actions runs ShellCheck and the tests in clean Debian 12 and 13 containers on every push. The tests refuse to run outside a throwaway container or VM (`UPDATER_TESTS=1`).
+- **Support dates from Debian's own `distro-info-data`** (`/usr/share/distro-info/debian.csv`, columns found by name) when it is installed; the built-in table is now only a fallback. The report says where the dates came from ("Dates from: ...").
+- **Setting `FIRMWARE_UPDATES`**: `ask` (default), `install`, `check` or `off`. With `ask`, interactive runs ask before installing firmware and `--auto` runs only report.
+- **Setting `INSTALL_SECURITY_SUPPORT`**: `yes` (default) or `no`.
+- Git tags for every release from v1.0.0 to v1.5.0, and a GitHub release for v1.5.0.
+
+### Changed
+- **The firmware step reads `fwupdmgr get-updates --json`** instead of parsing the drawn device tree; python3 turns the JSON into one line per device. Without python3 the script shows fwupd's own text and never installs blind. The Secure Boot lists are recognised by fwupd's plugin names (`uefi_db`, `uefi_dbx`, `uefi_kek`, `uefi_pk`) instead of device names.
+- Firmware updates are no longer installed without asking by default (see `FIRMWARE_UPDATES`).
+- The settings file is read before the release lookup, so it can also set `DISTRO_INFO_CSV`.
+
+### Tested
+- Debian 12 laptop: the firmware JSON path with two rejected Secure Boot updates, dates from `distro-info-data`, Danish and English output, no errors.
+- GitHub Actions: ShellCheck and the integration tests in Debian 12 and Debian 13 containers.
+
+---
+
 ## v1.4.0 — 2026-09-27
 
 ### Added
