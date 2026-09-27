@@ -17,7 +17,7 @@ jobs:
       - name: Install ShellCheck
         run: apt-get update && apt-get install -y --no-install-recommends shellcheck
       - name: Run ShellCheck
-        run: shellcheck --severity=warning update_system.sh tests/run_tests.sh tests/unit_tests.sh
+        run: shellcheck --severity=style update_system.sh tests/run_tests.sh tests/unit_tests.sh
 
   unit:
     name: unit (${{ matrix.image }})

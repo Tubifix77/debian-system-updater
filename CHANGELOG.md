@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The README (English and Danish) now leads with what the script adds: a one-line summary, the questions the report answers, a real example, a comparison with apt on its own and with topgrade, "Built to be trusted", and a quick start. Badges for CI, supported releases, ShellCheck and the license.
+- CI enforces ShellCheck at every severity, not only warnings.
+- New GitHub description and topics.
+
+---
+
 ## v1.6.0 — 2026-09-27
 
 ### Changed
