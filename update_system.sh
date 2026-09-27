@@ -19,7 +19,7 @@
 # the final report. Function-local variables are lower case.
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly UPDATER_VERSION="1.6.1"
+readonly UPDATER_VERSION="1.7.0"
 readonly CONFIG_FILE="/etc/default/debian-system-updater"
 readonly LINE_WIDTH=57   # the longest title ends at column 54; 3 characters of margin
 readonly RED='\033[0;31m' YELLOW='\033[1;33m' GREEN='\033[0;32m'
@@ -35,15 +35,23 @@ readonly DEBIAN_RELEASES="
 13 trixie   2028-08-09 2030-06-30
 "
 
+# Defaults of the settings the settings screen manages, and its choices
+readonly DEFAULT_LTS_WARN_DAYS=30
+readonly DEFAULT_LTS_ALARM_DAYS=7
+readonly DEFAULT_INSTALL_SECURITY_SUPPORT=yes
+readonly DEFAULT_FIRMWARE_UPDATES=ask
+readonly -a WARN_DAY_CHOICES=(30 60 90 180)
+readonly -a ALARM_DAY_CHOICES=(7 14)
+
 # ─── Settings (defaults; each can be overridden in CONFIG_FILE) ───────────────
 LOG_FILE="/var/log/debian-updater.log"
 LOG_MAX_BYTES=5242880          # rotate the log (to .1) when it exceeds 5 MB
-LTS_WARN_DAYS=30               # yellow warning at this many days left (or fewer)
-LTS_ALARM_DAYS=7               # red alarm at this many days left (or fewer)
+LTS_WARN_DAYS=${DEFAULT_LTS_WARN_DAYS}      # yellow warning at this many days left
+LTS_ALARM_DAYS=${DEFAULT_LTS_ALARM_DAYS}    # red alarm at this many days left
 LTS_END_NOTE=""                # own reminder next to the warnings (empty: built-in)
 UI_LANG=""                     # da or en (empty: follow the system language)
-INSTALL_SECURITY_SUPPORT=yes   # yes: install debian-security-support if missing
-FIRMWARE_UPDATES=ask           # ask (never in --auto), install, check or off
+INSTALL_SECURITY_SUPPORT=${DEFAULT_INSTALL_SECURITY_SUPPORT}   # yes or no
+FIRMWARE_UPDATES=${DEFAULT_FIRMWARE_UPDATES}   # ask (never in --auto), install, check, off
 DISTRO_INFO_CSV="/usr/share/distro-info/debian.csv"   # Debian's release dates
 
 # ─── Output helpers ───────────────────────────────────────────────────────────
@@ -182,27 +190,36 @@ require_root() {
 
 #######################################
 # Reads the optional settings file and checks its values. A --lang option wins
-# over UI_LANG from the file; invalid values fall back to the defaults.
+# over UI_LANG from the file; invalid values fall back to the defaults. The
+# language as configured ("" = automatic) is kept for the settings screen.
 # Globals:
 #   CONFIG_FILE, CLI_LANG, DETECTED_LANG (read); the settings, REGULAR_END,
-#   LTS_END (may be set by the file); LTS_END_NOTE (built-in text if empty)
+#   LTS_END (may be set by the file); CFG_UI_LANG, UI_LANG (set)
 #######################################
 load_settings() {
   REGULAR_END=""
   LTS_END=""
+  UI_LANG=""   # only the settings file may set it here
   if [[ -r "${CONFIG_FILE}" ]]; then
     # shellcheck source=/dev/null
     . "${CONFIG_FILE}"
   fi
-  if [[ -n "${CLI_LANG}" ]]; then
-    UI_LANG=${CLI_LANG}
+  CFG_UI_LANG=${UI_LANG}
+  case "${CFG_UI_LANG}" in da | en) ;; *) CFG_UI_LANG="" ;; esac
+  UI_LANG=${CLI_LANG:-${CFG_UI_LANG:-${DETECTED_LANG}}}
+  case "${INSTALL_SECURITY_SUPPORT}" in
+    yes | no) ;;
+    *) INSTALL_SECURITY_SUPPORT=${DEFAULT_INSTALL_SECURITY_SUPPORT} ;;
+  esac
+  case "${FIRMWARE_UPDATES}" in
+    ask | install | check | off) ;;
+    *) FIRMWARE_UPDATES=${DEFAULT_FIRMWARE_UPDATES} ;;
+  esac
+  if [[ ! "${LTS_WARN_DAYS}" =~ ^[0-9]+$ ]]; then
+    LTS_WARN_DAYS=${DEFAULT_LTS_WARN_DAYS}
   fi
-  case "${UI_LANG}" in da | en) ;; *) UI_LANG=${DETECTED_LANG} ;; esac
-  case "${INSTALL_SECURITY_SUPPORT}" in yes | no) ;; *) INSTALL_SECURITY_SUPPORT=yes ;; esac
-  case "${FIRMWARE_UPDATES}" in ask | install | check | off) ;; *) FIRMWARE_UPDATES=ask ;; esac
-  if [[ -z "${LTS_END_NOTE}" ]]; then
-    LTS_END_NOTE=$(t "Planlæg skiftet til den næste Debian-udgave i god tid: https://www.debian.org/releases/" \
-                     "Plan the move to the next Debian release in good time: https://www.debian.org/releases/")
+  if [[ ! "${LTS_ALARM_DAYS}" =~ ^[0-9]+$ ]]; then
+    LTS_ALARM_DAYS=${DEFAULT_LTS_ALARM_DAYS}
   fi
 }
 
@@ -1082,12 +1099,15 @@ print_report() {
 # package), and yellow/red warnings towards the end.
 # Globals:
 #   OS_VERSION_ID, OS_PRETTY, RELEASE_KNOWN, REGULAR_END, LTS_END, the
-#   countdown, LTS_WARN_DAYS, LTS_ALARM_DAYS, LTS_END_NOTE, DATE_SOURCE (read)
+#   countdown, LTS_WARN_DAYS, LTS_ALARM_DAYS, LTS_END_NOTE (built-in text
+#   when empty), DATE_SOURCE (read)
 # Outputs:
 #   The support clock on STDOUT.
 #######################################
 print_support_clock() {
   local label="Debian ${OS_VERSION_ID}"
+  local note=${LTS_END_NOTE:-$(t "Planlæg skiftet til den næste Debian-udgave i god tid: https://www.debian.org/releases/" \
+                                 "Plan the move to the next Debian release in good time: https://www.debian.org/releases/")}
   echo ""
   if [[ "${RELEASE_KNOWN}" != true ]]; then
     echo -e "  🗓  $(t "Support-ur: ingen datoer for ${OS_PRETTY} (se DEBIAN_RELEASES øverst i scriptet)." \
@@ -1098,16 +1118,16 @@ print_support_clock() {
     echo -e "${RED}${BOLD}  ✗  ${label^^}: $(t "SIKKERHEDSSUPPORT SLUTTEDE ${LTS_END} — for $(( -LTS_DAYS_LEFT )) dage siden." \
                                               "SECURITY SUPPORT ENDED ${LTS_END}, $(( -LTS_DAYS_LEFT )) days ago.")${NC}"
     echo -e "${RED}     $(t "Systemet får IKKE længere sikkerhedsopdateringer." "This system NO LONGER gets security updates.")${NC}"
-    echo -e "${RED}     ${LTS_END_NOTE}${NC}"
+    echo -e "${RED}     ${note}${NC}"
   elif (( LTS_DAYS_LEFT <= LTS_ALARM_DAYS )); then
     echo -e "${RED}${BOLD}  ⚠  ${label^^}: $(t "SIKKERHEDSSUPPORT SLUTTER OM ${LTS_DAYS_LEFT} DAGE (${LTS_END})!" \
                                               "SECURITY SUPPORT ENDS IN ${LTS_DAYS_LEFT} DAYS (${LTS_END})!")${NC}"
     echo -e "${RED}     $(t "Herefter kommer der ingen sikkerhedsopdateringer." "After that there will be no security updates.")${NC}"
-    echo -e "${RED}     ${LTS_END_NOTE}${NC}"
+    echo -e "${RED}     ${note}${NC}"
   elif (( LTS_DAYS_LEFT <= LTS_WARN_DAYS )); then
     echo -e "${YELLOW}${BOLD}  ⚠  ${label}: $(t "sikkerhedssupport slutter om ${LTS_DAYS_LEFT} dage (${LTS_END}). Planlæg nu." \
                                                 "security support ends in ${LTS_DAYS_LEFT} days (${LTS_END}). Plan now.")${NC}"
-    echo -e "${YELLOW}     ${LTS_END_NOTE}${NC}"
+    echo -e "${YELLOW}     ${note}${NC}"
   elif (( REGULAR_DAYS_LEFT >= 0 )); then
     echo -e "  🗓  ${label}: $(t "fuld sikkerhedssupport til ${REGULAR_END} (${REGULAR_DAYS_LEFT} dage), derefter LTS til ${LTS_END}" \
                                "full security support until ${REGULAR_END} (${REGULAR_DAYS_LEFT} days), then LTS until ${LTS_END}") — ${BOLD}${LTS_DAYS_LEFT} $(t "dage tilbage" "days left")${NC}"
@@ -1140,6 +1160,93 @@ print_footer() {
   echo ""
   echo -e "  📋 $(t "Fuld log" "Full log"): ${BOLD}${LOG_FILE}${NC}"
   echo ""
+}
+
+# ─── Settings screen ──────────────────────────────────────────────────────────
+
+#######################################
+# Picks the choice after the current one, wrapping around. An unknown current
+# value gives the first choice.
+# Arguments:
+#   Current value, then the choices in order.
+# Outputs:
+#   The next choice on STDOUT.
+#######################################
+cycle_value() {
+  local current=$1
+  shift
+  local -a choices=("$@")
+  local i
+  for (( i = 0; i < ${#choices[@]}; i++ )); do
+    if [[ "${choices[i]}" == "${current}" ]]; then
+      printf '%s' "${choices[(i + 1) % ${#choices[@]}]}"
+      return 0
+    fi
+  done
+  printf '%s' "${choices[0]}"
+}
+
+#######################################
+# Quotes a text for a shell file: single quotes, with any single quote inside
+# written as '\''. The settings file is loaded as shell code by root, so free
+# text such as the personal reminder must never be able to run anything.
+# Arguments:
+#   The text.
+# Outputs:
+#   The quoted text on STDOUT.
+#######################################
+shell_quote() {
+  local text=${1//\'/\'\\\'\'}
+  printf "'%s'" "${text}"
+}
+
+#######################################
+# Writes the settings managed by the settings screen to the settings file.
+# Other lines (comments, settings edited by hand) are kept; a setting at its
+# default value is left out, so the default applies. The file is replaced in
+# one step (write a temp file, then rename), readable by all, writable by root.
+# Globals:
+#   The DEFAULT_* constants (read)
+# Arguments:
+#   Settings file, language ("" = automatic), firmware mode, install security
+#   support (yes/no), yellow warning days, red alarm days, personal reminder.
+# Returns:
+#   Non-zero when the file cannot be written.
+#######################################
+settings_write() {
+  local file=$1 lang=$2 fw=$3 ss=$4 warn=$5 alarm=$6 note=$7 tmp
+  tmp=$(mktemp "${file}.XXXXXX") || return 1
+  if [[ -f "${file}" ]]; then
+    grep -vE '^[[:space:]]*(UI_LANG|FIRMWARE_UPDATES|INSTALL_SECURITY_SUPPORT|LTS_WARN_DAYS|LTS_ALARM_DAYS|LTS_END_NOTE)=' \
+      "${file}" > "${tmp}"
+  else
+    printf '%s\n' "# Settings for debian-system-updater, read by update_system.sh." \
+      "# Written by its settings screen (--settings); can also be edited by hand." > "${tmp}"
+  fi
+  {
+    if [[ -n "${lang}" ]]; then
+      printf 'UI_LANG=%s\n' "${lang}"
+    fi
+    if [[ "${fw}" != "${DEFAULT_FIRMWARE_UPDATES}" ]]; then
+      printf 'FIRMWARE_UPDATES=%s\n' "${fw}"
+    fi
+    if [[ "${ss}" != "${DEFAULT_INSTALL_SECURITY_SUPPORT}" ]]; then
+      printf 'INSTALL_SECURITY_SUPPORT=%s\n' "${ss}"
+    fi
+    if [[ "${warn}" != "${DEFAULT_LTS_WARN_DAYS}" ]]; then
+      printf 'LTS_WARN_DAYS=%s\n' "${warn}"
+    fi
+    if [[ "${alarm}" != "${DEFAULT_LTS_ALARM_DAYS}" ]]; then
+      printf 'LTS_ALARM_DAYS=%s\n' "${alarm}"
+    fi
+    if [[ -n "${note}" ]]; then
+      printf 'LTS_END_NOTE=%s\n' "$(shell_quote "${note}")"
+    fi
+  } >> "${tmp}"
+  if ! { chmod 644 "${tmp}" && mv -f "${tmp}" "${file}"; }; then
+    rm -f "${tmp}"
+    return 1
+  fi
 }
 
 #######################################

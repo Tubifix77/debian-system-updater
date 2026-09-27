@@ -284,6 +284,57 @@ summarise_unattended_upgrades "${WORK}/missing.log"
 check "unattended-upgrades: missing log" \
   eq "${UU_STATUS}" "active — 0 nightly runs / 0 packages in this month's log, last unknown"
 
+# ─── Settings file ────────────────────────────────────────────────────────────
+check "cycle: next choice"                  eq "$(cycle_value ask ask install check off)" install
+check "cycle: wraps around"                 eq "$(cycle_value off ask install check off)" ask
+check "cycle: unknown value gives the first" eq "$(cycle_value 45 30 60 90 180)" 30
+check "cycle: empty is a valid choice"      eq "$(cycle_value "" "" da en)" da
+check "cycle: back to empty"                eq "$(cycle_value en "" da en)" ""
+
+# If quoting ever broke, the commands in this text would create marker files
+tricky="It's \$HOME, \`touch ${WORK}/ran1\`, \$(touch ${WORK}/ran2) \"quoted\" æøå; touch ${WORK}/ran3 #"
+roundtrip=""
+eval "roundtrip=$(shell_quote "${tricky}")"
+check "shell_quote: text survives exactly"  eq "${roundtrip}" "${tricky}"
+check "shell_quote: nothing in the text ran" eq "$(find "${WORK}" -name 'ran*' | wc -l)" 0
+
+settings_file="${WORK}/settings"
+printf '%s\n' '# My own comment' 'LOG_FILE=/tmp/my.log' 'LTS_END_NOTE="old note"' 'FIRMWARE_UPDATES=off' > "${settings_file}"
+settings_write "${settings_file}" en check no 60 14 "${tricky}"
+check "settings_write: succeeds"            eq "$?" 0
+check "settings_write: keeps comments and hand-made settings" \
+  eq "$(grep -cxE '# My own comment|LOG_FILE=/tmp/my.log' "${settings_file}")" 2
+check "settings_write: each managed setting written once" \
+  eq "$(grep -cE '^(UI_LANG|FIRMWARE_UPDATES|INSTALL_SECURITY_SUPPORT|LTS_WARN_DAYS|LTS_ALARM_DAYS|LTS_END_NOTE)=' "${settings_file}")" 6
+check "settings_write: the old reminder is gone" eq "$(grep -c 'old note' "${settings_file}")" 0
+check "settings_write: readable by all, writable by the owner" eq "$(stat -c %a "${settings_file}")" 644
+loaded=$( # shellcheck source=/dev/null
+  . "${settings_file}"; echo "${UI_LANG}|${FIRMWARE_UPDATES}|${INSTALL_SECURITY_SUPPORT}|${LTS_WARN_DAYS}|${LTS_ALARM_DAYS}")
+check "settings_write: the file loads back with the same values" eq "${loaded}" "en|check|no|60|14"
+loaded_note=$( # shellcheck source=/dev/null
+  . "${settings_file}"; echo "${LTS_END_NOTE}")
+check "settings_write: the reminder loads back exactly" eq "${loaded_note}" "${tricky}"
+check "settings_write: loading the file ran nothing" eq "$(find "${WORK}" -name 'ran*' | wc -l)" 0
+settings_write "${settings_file}" "" ask yes 30 7 ""
+check "settings_write: defaults are left out" \
+  eq "$(grep -cE '^(UI_LANG|FIRMWARE_UPDATES|INSTALL_SECURITY_SUPPORT|LTS_WARN_DAYS|LTS_ALARM_DAYS|LTS_END_NOTE)=' "${settings_file}")" 0
+new_file="${WORK}/new-settings"
+settings_write "${new_file}" da ask yes 30 7 ""
+check "settings_write: creates a new file with a header" eq "$(head -c1 "${new_file}")|$(grep -cx 'UI_LANG=da' "${new_file}")" "#|1"
+check "settings_write: leaves no temp files" eq "$(find "${WORK}" -name 'settings.*' -o -name 'new-settings.*' | wc -l)" 0
+
+clock_note() {   # clock_note NOTE : the reminder line under a yellow warning
+  (
+    UI_LANG=en; RELEASE_KNOWN=true; OS_VERSION_ID=12; OS_PRETTY=Debian; DATE_SOURCE=""
+    REGULAR_END=""; LTS_END=2028-06-30; LTS_DAYS_LEFT=20; REGULAR_DAYS_LEFT=-1
+    LTS_WARN_DAYS=30; LTS_ALARM_DAYS=7; LTS_END_NOTE=$1
+    print_support_clock | sed 's/\x1b\[[0-9;]*m//g' | sed -n '3p' | sed 's/^ *//'
+  )
+}
+check "support clock: built-in reminder when none is set" \
+  eq "$(clock_note "")" "Plan the move to the next Debian release in good time: https://www.debian.org/releases/"
+check "support clock: your own reminder when set" eq "$(clock_note "My GPU note")" "My GPU note"
+
 # ─── Layout ───────────────────────────────────────────────────────────────────
 # The lines above and below the titles must reach past the longest title with a
 # margin of at least 3 characters. ASCII "|" stands in for "│" so that the
