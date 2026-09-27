@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## v1.7.0 — 2026-09-27
+
+### Added
+- **Settings screen in the terminal**, in the same ASCII style as the rest. Press TAB at the end of a run, or start it with `--settings`. It shows the six settings (language, firmware updates, security-support check, yellow warning, red alarm, personal reminder), each with a line saying what the current choice does. Keys 1–6 change a setting, G/S saves, N/R resets to the defaults and A/Q cancels (asking first if anything changed); the Danish and the English keys both work. On a terminal it opens like an editor, so the report comes back when it closes, and its screens never go into the log.
+- The settings file is written safely: comments and lines edited by hand are kept, settings at their default are left out, the file is replaced in one step, and the personal reminder is quoted so it can never run as code.
+- Unit tests for the screen, driven by typed keys, and for the settings file. Integration tests that type into a real terminal with `script`: `--settings`, and a full interactive run where TAB, a change and saving work end to end without the screen reaching the log.
 
 ### Changed
-- README (English and Danish): an "Out of scope on purpose" section explains why language package managers (pip, Cargo, Ruby gems) and editor extensions are left to tools like topgrade.
+- The end of an interactive run now says "Press ENTER to exit or TAB for settings".
+- The warning thresholds from the settings file are checked (whole days); invalid values fall back to the defaults.
+- README (English and Danish): the settings screen, and an "Out of scope on purpose" section explaining why language package managers (pip, Cargo, Ruby gems) and editor extensions are left to tools like topgrade.
 
 ---
 

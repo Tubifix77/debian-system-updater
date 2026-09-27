@@ -20,6 +20,7 @@ Keeping a Debian desktop current takes several commands, and the warnings that m
 - **How long will my release get security updates?** A countdown through full support and LTS, with yellow and red warnings as the end approaches.
 - **Are the nightly automatic updates running?** It shows what `unattended-upgrades` installed this month.
 - **Do the firmware updates matter?** It reads the Secure Boot state and explains updates the firmware rejects, instead of just failing.
+- **Want it different?** Press TAB at the end of a run for a settings screen in the terminal: language, firmware, the security-support check, the warnings and your own reminder, each explained in one line. No text editor, no commands.
 
 ## Example
 
@@ -118,7 +119,7 @@ The dates in the table above come from `distro-info-data`, [debian.org/releases]
 6. **apt-get clean** — clears downloaded .deb files
 7. **Firmware** — refreshes LVFS metadata and checks for firmware updates via `fwupdmgr`, if fwupd is installed. By default it asks before installing anything (see `FIRMWARE_UPDATES`). Skipped in containers (WSL, Docker, LXC), where the firmware belongs to the host.
 8. **Security status** — installs `debian-security-support` once (unless `INSTALL_SECURITY_SUPPORT=no`) and shows which installed packages have lost or have limited security support
-9. **Report** — everything above on one screen, the support clock, a restart notice and the path to the log
+9. **Report** — everything above on one screen, the support clock, a restart notice and the path to the log; then ENTER exits and TAB opens the [settings screen](#settings)
 
 ## Usage
 
@@ -126,6 +127,7 @@ The dates in the table above come from `distro-info-data`, [debian.org/releases]
 sudo bash update_system.sh               # interactive
 sudo bash update_system.sh --auto        # non-interactive (cron / automation)
 sudo bash update_system.sh --lang=en     # force English (or --lang=da for Danish)
+sudo bash update_system.sh --settings    # settings screen, without running updates
 bash update_system.sh --help
 ```
 
@@ -151,7 +153,46 @@ Without this, a cron run can hang forever on a question nobody sees.
 
 ## Settings
 
-Settings go in `/etc/default/debian-system-updater`. The file is optional and is not overwritten when you download a new version of the script. Every line is optional:
+The easy way is the settings screen. Press **TAB** when the report asks "Press ENTER to exit or TAB for settings", or open it without running updates:
+
+```bash
+sudo bash update_system.sh --settings
+```
+
+It opens like a small editor in the terminal:
+
+```
+═════════════════════════════════════════════════════════
+  Settings  │  Debian System Updater v1.7.0
+═════════════════════════════════════════════════════════
+
+  1  Language                   Automatic (English)
+     Follows the system language.
+
+  2  Firmware updates           Ask first (recommended)
+     Asks before anything is installed.
+
+  3  Security-support check     Install (recommended)
+     Installs debian-security-support for step 8.
+
+  4  Yellow warning             30 days before the end
+     The clock turns yellow 30 days before the end.
+
+  5  Red alarm                  7 days before the end
+     The clock turns red 7 days before the end.
+
+  6  Personal reminder          (the standard text)
+     Shown with the warnings. Empty = standard text.
+
+═════════════════════════════════════════════════════════
+  Keys 1-6: change   S: save   R: reset   Q: cancel
+  Saved to /etc/default/debian-system-updater
+═════════════════════════════════════════════════════════
+```
+
+Press 1–6 to change a setting: each press moves to the next choice, and the line under it says what the current choice does. S saves, R resets to the defaults and Q cancels; on the Danish screen the keys are G, N and A, and both sets always work. Changes apply from the next run.
+
+The screen writes `/etc/default/debian-system-updater`. You can also edit that file by hand: it is optional, it is not overwritten when you download a new version of the script, and lines the screen does not manage are kept. Every line is optional:
 
 ```bash
 # /etc/default/debian-system-updater
@@ -212,7 +253,7 @@ Every push runs the [CI workflow](.github/workflows/ci.yml):
 
 - **ShellCheck** on all scripts, at every severity.
 - **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
-- **Integration tests** in `tests/run_tests.sh`, which run the real script in clean Debian 12 and Debian 13 containers in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source and the option handling.
+- **Integration tests** in `tests/run_tests.sh`, which run the real script in clean Debian 12 and Debian 13 containers in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source, the option handling, and the settings screen typed into a real terminal.
 
 The integration tests change system settings, so they refuse to run anywhere but a throwaway container or VM with `UPDATER_TESTS=1`:
 

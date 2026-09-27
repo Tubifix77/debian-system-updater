@@ -20,6 +20,7 @@ At holde et Debian-skrivebord ajour kræver flere kommandoer, og de advarsler, d
 - **Hvor længe får min udgave sikkerhedsopdateringer?** En nedtælling gennem fuld support og LTS med gule og røde advarsler, når slutningen nærmer sig.
 - **Kører de natlige automatiske opdateringer?** Den viser, hvad `unattended-upgrades` har installeret i denne måned.
 - **Betyder firmware-opdateringerne noget?** Den læser Secure Boot-status og forklarer opdateringer, som firmwaren afviser, i stedet for bare at fejle.
+- **Vil du have det anderledes?** Tryk TAB til sidst i en kørsel for en indstillingsskærm i terminalen: sprog, firmware, tjekket af sikkerhedssupport, advarslerne og din egen huskeseddel, hver forklaret på én linje. Ingen teksteditor, ingen kommandoer.
 
 ## Eksempel
 
@@ -118,7 +119,7 @@ Datoerne i tabellen ovenfor kommer fra `distro-info-data`, [debian.org/releases]
 6. **apt-get clean** — rydder op i downloadede .deb-filer
 7. **Firmware** — henter LVFS-metadata og tjekker for firmware-opdateringer via `fwupdmgr`, hvis fwupd er installeret. Som standard spørger det, før noget installeres (se `FIRMWARE_UPDATES`). Springes over i containere (WSL, Docker, LXC), hvor firmwaren tilhører værtsmaskinen.
 8. **Sikkerhedsstatus** — installerer `debian-security-support` én gang (medmindre `INSTALL_SECURITY_SUPPORT=no`) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
-9. **Rapport** — alt ovenstående på én skærm, support-uret, genstart-advarsel og sti til logfilen
+9. **Rapport** — alt ovenstående på én skærm, support-uret, genstart-advarsel og sti til logfilen; derefter afslutter ENTER, og TAB åbner [indstillingsskærmen](#indstillinger)
 
 ## Brug
 
@@ -126,6 +127,7 @@ Datoerne i tabellen ovenfor kommer fra `distro-info-data`, [debian.org/releases]
 sudo bash update_system.sh               # interaktiv
 sudo bash update_system.sh --auto        # ikke-interaktiv (cron / automation)
 sudo bash update_system.sh --lang=en     # engelske beskeder (eller --lang=da for dansk)
+sudo bash update_system.sh --settings    # indstillingsskærmen, uden at køre opdateringer
 bash update_system.sh --help
 ```
 
@@ -151,7 +153,46 @@ Uden dette kan en cron-kørsel hænge for evigt på et spørgsmål, ingen ser.
 
 ## Indstillinger
 
-Indstillinger lægges i `/etc/default/debian-system-updater`. Filen er valgfri, og den overskrives ikke, når du henter en ny version af scriptet. Alle linjer er valgfrie:
+Den nemme vej er indstillingsskærmen. Tryk **TAB**, når rapporten spørger "Tryk ENTER for at afslutte eller TAB for indstillinger", eller åbn den uden at køre opdateringer:
+
+```bash
+sudo bash update_system.sh --settings
+```
+
+Den åbner som en lille editor i terminalen:
+
+```
+═════════════════════════════════════════════════════════
+  Indstillinger  │  Debian System Updater v1.7.0
+═════════════════════════════════════════════════════════
+
+  1  Sprog                      Automatisk (dansk)
+     Følger systemets sprog.
+
+  2  Firmware-opdateringer      Spørg først (anbefalet)
+     Spørger, før noget installeres.
+
+  3  Tjek af sikkerhedssupport  Installér (anbefalet)
+     Installerer debian-security-support til trin 8.
+
+  4  Gul advarsel               30 dage før slut
+     Uret bliver gult 30 dage før slutdatoen.
+
+  5  Rød alarm                  7 dage før slut
+     Uret bliver rødt 7 dage før slutdatoen.
+
+  6  Personlig huskeseddel      (standardteksten)
+     Vises ved advarslerne. Tom = standardteksten.
+
+═════════════════════════════════════════════════════════
+  Tast 1-6: skift   G: gem   N: nulstil   A: annullér
+  Gemmes i /etc/default/debian-system-updater
+═════════════════════════════════════════════════════════
+```
+
+Tryk 1–6 for at ændre en indstilling: hvert tryk går videre til næste valg, og linjen under den fortæller, hvad det aktuelle valg gør. G gemmer, N nulstiller til standardværdierne, og A annullerer; på den engelske skærm er tasterne S, R og Q, og begge sæt virker altid. Ændringerne bruges fra næste kørsel.
+
+Skærmen skriver `/etc/default/debian-system-updater`. Du kan også redigere filen i hånden: den er valgfri, den overskrives ikke, når du henter en ny version af scriptet, og linjer, som skærmen ikke styrer, bliver bevaret. Alle linjer er valgfrie:
 
 ```bash
 # /etc/default/debian-system-updater
@@ -212,7 +253,7 @@ Hvert push kører [CI-workflowet](.github/workflows/ci.yml):
 
 - **ShellCheck** på alle scripts, på alle niveauer.
 - **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
-- **Integrationstest** i `tests/run_tests.sh`, der kører det rigtige script i rene Debian 12- og Debian 13-containere i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde og håndteringen af tilvalg.
+- **Integrationstest** i `tests/run_tests.sh`, der kører det rigtige script i rene Debian 12- og Debian 13-containere i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde, håndteringen af tilvalg og indstillingsskærmen, betjent i en rigtig terminal.
 
 Integrationstestene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:
 
