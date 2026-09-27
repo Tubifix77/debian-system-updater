@@ -1,74 +1,92 @@
 # Changelog
 
+## v1.4.0 — 2026-09-27
+
+### Added
+- **English and Danish in one script.** Messages follow the system language: Danish when `LC_ALL`, `LC_MESSAGES` or `LANG` starts with `da`, English otherwise. Force a language with `--lang=da|en` or with `UI_LANG` in `/etc/default/debian-system-updater`; the option wins over the file.
+- `--help`. Unknown options now stop with a usage message (exit code 2) instead of being ignored.
+- The README is now in English, with a Danish translation in `README.da.md`. Code comments and this changelog are in English.
+- MIT license (`LICENSE`).
+
+### Changed
+- The built-in reminder text (`LTS_END_NOTE`) follows the language. A personal note in the settings file is shown exactly as written.
+
+### Tested
+- Debian 12 laptop with a Danish system language: Danish output identical to v1.3; English output with `LANG=en_US.UTF-8`; `--help`, `--lang=en --help`, an unknown option (exit code 2), a bad `--lang` value (exit code 2) and a run without root (exit code 1).
+- Debian 13 (WSL2 test distro): English by auto-detection and Danish with `--lang=da`.
+- shellcheck 0.10.0: no warnings.
+
+---
+
 ## v1.3.0 — 2026-09-27
 
-### Tilføjet
-- **Debian 13 "trixie" i samme script.** Scriptet læser `/etc/os-release` og slår supportdatoerne op i tabellen `DEBIAN_RELEASES` (bookworm og trixie). Headeren viser den fundne udgave. På en Debian-udgave, der ikke står i tabellen, kører alt andet, og kun support-uret udelades. På et system, der ikke er Debian, springes sikkerhedsstatus og support-ur over med en advarsel.
-- **Support-ur i to faser:** fuld sikkerhedssupport og LTS vises hver for sig ("fuld sikkerhedssupport til 2028-08-09 (681 dage), derefter LTS til 2030-06-30"), med en gul note 30 dage før overgangen til LTS.
-- **Valgfri indstillingsfil** `/etc/default/debian-system-updater`, der overlever opdateringer af scriptet (fx `LTS_END_NOTE` og `LTS_WARN_DAYS`).
-- **Container-tjek i firmware-trinnet:** i WSL, Docker og LXC springes fwupd over (tjenesten har `ConditionVirtualization=!container` og starter ikke) i stedet for at vente 2 × 25 sekunder og melde to fejl.
+### Added
+- **Debian 13 "trixie" in the same script.** The script reads `/etc/os-release` and looks up the support dates in the table `DEBIAN_RELEASES` (bookworm and trixie). The header shows the detected release. On a Debian release that is not in the table everything else runs and only the support clock is left out. On a system that is not Debian, the security status and the support clock are skipped with a warning.
+- **Two-phase support clock:** full security support and LTS are shown separately ("full security support until 2028-08-09 (681 days), then LTS until 2030-06-30"), with a yellow note 30 days before the move to LTS.
+- **Optional settings file** `/etc/default/debian-system-updater` that survives script updates (for example `LTS_END_NOTE` and `LTS_WARN_DAYS`).
+- **Container check in the firmware step:** in WSL, Docker and LXC, fwupd is skipped (its service has `ConditionVirtualization=!container` and never starts) instead of waiting 2 × 25 seconds and reporting two errors.
 
-### Ændret
-- Den personlige GT 730M-note er fjernet fra scriptet; standardnoten er generel. En egen note lægges i indstillingsfilen.
-- Rapportlinjen "Sikkerhedssupport (LTS)" hedder nu "Sikkerhedssupport", og trin 8 viser den fundne udgave.
-- Ubrugt variabel (`TEE_PID`) fjernet; shellcheck-direktiv for den valgfrie indstillingsfil.
+### Changed
+- The personal GPU reminder was removed from the script; the default note is generic. A personal note goes in the settings file.
+- The report line "Security support (LTS)" is now called "Security support", and step 8 shows the detected release.
+- Removed an unused variable (`TEE_PID`); added a shellcheck directive for the optional settings file.
 
-### Testet
-- Debian 13 (WSL2-testdistro fra Debians eget WSL-image, 13.5, apt 3.0.3, flatpak 1.16.6, fwupd 2.0.20): 40 opgraderinger med én pakke på hold, Flatpak, unattended-upgrades, debian-security-support og en utilgængelig pakkekilde. apt-get's output er uændret i apt 3.0 (klassisk statuslinje og "kept back"-liste), og `APT::Update::Error-Mode=any` gør stadig en fejlende kilde til en fejl (returkode 100 i stedet for 0).
-- Debian 12 (bookworm-chroot bygget med debootstrap, apt 2.6.1): 3 opgraderinger, samme LTS-linje som før.
-- shellcheck 0.10.0: ingen advarsler.
+### Tested
+- Debian 13 (WSL2 test distro from Debian's own WSL image, 13.5, apt 3.0.3, flatpak 1.16.6, fwupd 2.0.20): 40 upgrades with one package on hold, Flatpak, unattended-upgrades, debian-security-support and an unreachable package source. apt-get's output is unchanged in apt 3.0 (classic summary line and "kept back" list), and `APT::Update::Error-Mode=any` still turns a failing source into an error (exit code 100 instead of 0).
+- Debian 12 (bookworm chroot built with debootstrap, apt 2.6.1): 3 upgrades, the same LTS line as before.
+- shellcheck 0.10.0: no warnings.
 
 ---
 
 ## v1.2.0 — 2026-09-18
 
-### Rettet
-- **Rapporten viste altid 0 opgraderede pakker** på systemer med dansk sprog, fordi apt's statuslinje blev læst på engelsk. Scriptet kører nu med `LC_ALL=C.UTF-8`, så apt/dpkg/flatpak svarer på engelsk (scriptets egne beskeder er stadig danske).
-- **Pakker der blev holdt tilbage** ("kept back", typisk pakker på hold) blev aldrig vist. Rapporten viser nu antal og navne, og hvilke pakker der er sat på hold med `apt-mark`.
-- **Flatpak-tælleren** talte linjenumre i skærmoutputtet og missede derfor nr. 10 og op, talte runtimes og fjernelser med som apps, og skrev et ekstra "0" på dage uden opdateringer. Tælles nu ved at sammenligne installerede refs/commits før og efter, opdelt i apps og runtimes (opdateret / nye / fjernet).
-- **`apt-get update` fik grønt flueben, selv når en kilde ikke kunne hentes** (apt melder kun en advarsel ved netværksfejl og returnerer 0). Kører nu med `APT::Update::Error-Mode=any`; fejlende kilder vises i rødt og tælles som fejl, mens opgraderingen fortsætter med de lister, der findes.
+### Fixed
+- **The report always showed 0 upgraded packages** on systems with a Danish language, because apt's summary line was parsed in English. The script now runs with `LC_ALL=C.UTF-8`, so apt/dpkg/flatpak answer in English (the script's own messages stayed Danish).
+- **Packages that were kept back** ("kept back", typically packages on hold) were never shown. The report now shows their number and names, and which packages are on hold with `apt-mark`.
+- **The Flatpak counter** counted line numbers in the screen output and therefore missed number 10 and up, counted runtimes and removals as apps, and printed an extra "0" on days without updates. It now compares the installed refs/commits before and after, split into apps and runtimes (updated / new / removed).
+- **`apt-get update` got a green tick even when a source could not be fetched** (apt only warns on network errors and returns 0). It now runs with `APT::Update::Error-Mode=any`; failing sources are shown in red and counted as errors, while the upgrade continues with the lists that are available.
 
-### Tilføjet
-- **Sikkerhedsstatus (trin 8):** installerer `debian-security-support`, hvis den mangler, og kører `check-support-status`. Rapporten skelner mellem pakker UDEN sikkerhedssupport og pakker med begrænset support.
-- **LTS-ur:** Debian 12 får sikkerhedsopdateringer til 2028-06-30. Rapporten viser altid dage tilbage, gul advarsel ved ≤ 30 dage (`LTS_WARN_DAYS`), rød alarm ved ≤ 7 dage (`LTS_ALARM_DAYS`) og efter datoen. Egen huskeseddel i `LTS_END_NOTE`.
-- **Automatiske opdateringer:** rapporten viser, om `unattended-upgrades` er aktiv, og hvor mange natlige kørsler/pakker der er i denne måneds apt-log. Det forklarer, hvorfor en manuel kørsel ofte finder få opdateringer.
-- **Firmware (trin 7):** `fwupdmgr refresh` → `get-updates` → `update` med `--no-reboot-check` (genstarter aldrig af sig selv), `--no-unreported-check` (sender ingen rapporter til LVFS) og `--no-metadata-check`. Returkode 2 ("intet at gøre") behandles ikke længere som fejl. Hardware-tjek: scriptet læser Secure Boot-status fra firmwaren, viser én linje pr. enhed med nuværende og ny version, installerer kun det firmwaren vil tage imod, og viser afviste opdateringer med fwupd's begrundelse (fx for lidt plads i UEFI-variabellageret). Er det kun Secure Boot-listerne (db/dbx), der afvises, og Secure Boot er slået fra, bliver det en neutral note i stedet for en advarsel; er Secure Boot slået til, advares der.
-- **`--auto` er nu reelt ikke-interaktivt:** `DEBIAN_FRONTEND=noninteractive` og dpkg `--force-confdef --force-confold`, så et debconf-spørgsmål eller en konfigurationsfil-konflikt ikke kan få en cron-kørsel til at hænge. Interaktive kørsler spørger som hidtil.
-- `dpkg --configure -a` før fix-broken (fuldfører en afbrudt installation).
-- Genstart-tjek sammenligner også kørende kerne med nyeste installerede kerne (filen `/var/run/reboot-required` oprettes kun af visse pakker).
-- Advarsel om Flatpak-komponenter, der er markeret end-of-life.
-- Varighed i rapporten, log-rotation ved 5 MB, returkode 1 hvis der var fejl (til cron).
-- `.gitattributes` sikrer LF-linjeskift i `.sh`-filer ved checkout på Windows.
+### Added
+- **Security status (step 8):** installs `debian-security-support` if it is missing and runs `check-support-status`. The report separates packages WITHOUT security support from packages with limited support.
+- **LTS clock:** Debian 12 gets security updates until 2028-06-30. The report always shows the days left, a yellow warning at ≤ 30 days (`LTS_WARN_DAYS`), a red alarm at ≤ 7 days (`LTS_ALARM_DAYS`) and after the date. Personal reminder in `LTS_END_NOTE`.
+- **Automatic updates:** the report shows whether `unattended-upgrades` is active and how many nightly runs/packages are in this month's apt log. That explains why a manual run often finds few updates.
+- **Firmware (step 7):** `fwupdmgr refresh` → `get-updates` → `update` with `--no-reboot-check` (never reboots on its own), `--no-unreported-check` (sends no reports to LVFS) and `--no-metadata-check`. Exit code 2 ("nothing to do") is no longer treated as an error. Hardware check: the script reads the Secure Boot state from the firmware, shows one line per device with the current and new version, only installs what the firmware will accept, and shows rejected updates with fwupd's reason (for example too little space in the UEFI variable store). If only the Secure Boot lists (db/dbx) are rejected and Secure Boot is off, this becomes a neutral note instead of a warning; if Secure Boot is on, you get a warning.
+- **`--auto` is now truly non-interactive:** `DEBIAN_FRONTEND=noninteractive` and dpkg `--force-confdef --force-confold`, so a debconf question or a config-file conflict cannot make a cron run hang. Interactive runs ask as before.
+- `dpkg --configure -a` before fix-broken (completes an interrupted installation).
+- The restart check also compares the running kernel with the newest installed kernel (the file `/var/run/reboot-required` is only created by some packages).
+- Warning about Flatpak components marked end-of-life.
+- Duration in the report, log rotation at 5 MB, exit code 1 if there were errors (for cron).
+- `.gitattributes` keeps LF line endings in `.sh` files on checkout on Windows.
 
-### Ændret
-- Trin er nu [1/8] … [8/8]. Rapporten har fået linjerne Pakkekilder, Pakker holdt tilbage, Fastholdte pakker (hold), Flatpak-runtimes, Firmware, Sikkerhedssupport (LTS) og Automatiske opdateringer.
+### Changed
+- Steps are now [1/8] … [8/8]. The report gained the lines Package sources, Packages kept back, Packages on hold, Flatpak runtimes, Firmware, Security support (LTS) and Automatic updates.
 
 ---
 
 ## v1.1.0 — 2026-06-18
 
-### Tilføjet
-- Farveoutput: grøn/gul/rød igennem alle trin
-- Automatisk logging til `/var/log/debian-updater.log` i realtid
-- Tidsstempler på start og slut
-- Diskplads pre-check: afbryder ved < 1 GB ledig, advarer ved < 2 GB
-- Notifikation hvis genstart er påkrævet (`/var/run/reboot-required`)
-- **Afsluttende rapport** med antal opgraderede pakker, Flatpaks, ryddede pakker og fejl
-- `--auto` flag til cron/automation (springer den afsluttende `read -p` over)
-- Betinget firmware-opdatering via `fwupdmgr` (hvis installeret)
-- Fejlhåndtering på `fix-broken`-trinnet (manglede i v1.0.0)
-- Tempfiler bruges til at parse statistik uden at miste realtidsoutput
+### Added
+- Coloured output: green/yellow/red throughout all steps
+- Automatic logging to `/var/log/debian-updater.log` in real time
+- Timestamps at start and end
+- Disk space pre-check: stops below 1 GB free, warns below 2 GB
+- Notice when a restart is required (`/var/run/reboot-required`)
+- **Final report** with the number of upgraded packages, Flatpaks, removed packages and errors
+- `--auto` flag for cron/automation (skips the final `read -p`)
+- Conditional firmware update via `fwupdmgr` (if installed)
+- Error handling in the `fix-broken` step (missing in v1.0.0)
+- Temp files are used to parse statistics without losing real-time output
 
-### Ændret
-- Alle kritiske trin viser nu `✓ Færdig` eller `✗ Fejl` eksplicit
-- Trin er nu nummererede [1/6] ... [6/6] for overblik
+### Changed
+- All critical steps now show `✓ Done` or `✗ Error` explicitly
+- Steps are now numbered [1/6] ... [6/6] for an overview
 
 ---
 
 ## v1.0.0 — 2026-06-18
 
-### Første udgivelse
-- Root-check via `$EUID`
-- Trinvis opdateringskæde: fix-broken → update → full-upgrade → flatpak → autoremove --purge → clean
-- Fejlhåndtering med `exit 1` på kritiske trin
-- Betinget Flatpak-understøttelse via `command -v` check
+### First release
+- Root check via `$EUID`
+- Step-by-step update chain: fix-broken → update → full-upgrade → flatpak → autoremove --purge → clean
+- Error handling with `exit 1` on critical steps
+- Conditional Flatpak support via a `command -v` check

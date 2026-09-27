@@ -1,138 +1,150 @@
 # debian-system-updater
 
-Et enkelt Bash-script til komplet vedligeholdelse af Debian 12 og Debian 13 — et "Windows Update"-alternativ til Debian.
+🇩🇰 [Dansk version](README.da.md)
 
-## Baggrund
+One Bash script that keeps a Debian 12 or Debian 13 system fully up to date: a "Windows Update" for Debian.
 
-Andre Linux-distributioner leveres med grafiske opdateringsstyrere. Debian gør ikke. Dette script udfylder det hul med én kommando, der udfører hele kæden: reparation af pakker, opdatering, opgradering, Flatpak, oprydning, firmware, sikkerhedsstatus og en klar afsluttende rapport.
+## Why
 
-Scriptet fortæller også de ting, Debian ellers holder for sig selv: hvilke pakker der er sat på hold og derfor ikke får sikkerhedsrettelser, hvilke pakker sikkerhedsholdet ikke længere retter, om de natlige automatiske opdateringer kører, og hvor mange dage der er tilbage af udgavens sikkerhedssupport.
+Debian has no single "update everything" button. Keeping a desktop current means apt, Flatpak and firmware updates, cleaning up, and knowing when your release stops getting security fixes. This script runs the whole chain with one command and ends with a clear report.
 
-## Understøttede udgaver
+It also tells you the things Debian keeps quiet about: which packages are on hold and therefore get no security fixes, which installed packages the security team no longer patches, whether the nightly automatic updates are running, and how many days of security support your release has left.
 
-| Udgave | Fuld sikkerhedssupport til | LTS til | Testet med |
+## Supported releases
+
+| Release | Full security support until | LTS until | Tested with |
 |---|---|---|---|
 | Debian 12 "bookworm" | 2026-07-11 | 2028-06-30 | apt 2.6 |
 | Debian 13 "trixie" | 2028-08-09 | 2030-06-30 | apt 3.0 |
 
-Det er det samme script på begge udgaver. Det læser `/etc/os-release` og slår datoerne op i en lille tabel (`DEBIAN_RELEASES`) øverst i scriptet. Når en ny udgave kommer, er det én linje at tilføje. På en udgave, der ikke står i tabellen, kører alt andet som normalt; kun support-uret mangler.
+The same script runs on both. It reads `/etc/os-release` and looks up the dates in a small table (`DEBIAN_RELEASES`) at the top of the script, so a new release is one line to add. On a release that is not in the table everything else still runs; only the support clock is missing.
 
-Datoerne kommer fra [debian.org/releases](https://www.debian.org/releases/) og [wiki.debian.org/LTS](https://wiki.debian.org/LTS). For bookworm siger udgivelsessiden fuld support til 2026-07-11, mens LTS-wikien angiver LTS fra 2026-06-11. Slutdatoen 2028-06-30 er den samme begge steder.
+The dates come from [debian.org/releases](https://www.debian.org/releases/) and [wiki.debian.org/LTS](https://wiki.debian.org/LTS). For bookworm the release page says full support until 2026-07-11, while the LTS wiki gives LTS from 2026-06-11. The end date 2028-06-30 is the same in both.
 
-## Hvad scriptet gør
+## Language
 
-0. **Pre-check** — tjekker diskplads og afbryder ved < 1 GB ledig
-1. **Reparation** — `dpkg --configure -a` og `apt-get --fix-broken install`
-2. **apt-get update** — henter pakkelister; en kilde der ikke kan hentes vises i rødt (apt selv giver kun en advarsel)
-3. **apt-get full-upgrade** — fuld systemopgradering; pakker der holdes tilbage vises med navn
-4. **flatpak update** — opdaterer Flatpak-apps og -runtimes, hvis Flatpak er installeret
-5. **apt-get autoremove --purge** — fjerner ubrugte pakker og deres konfiguration
-6. **apt-get clean** — rydder op i downloadede .deb-filer
-7. **Firmware** — henter LVFS-metadata og anvender firmware-opdateringer via `fwupdmgr`, hvis fwupd er installeret. Genstarter aldrig af sig selv og sender ingen rapporter til LVFS. Springes over i containere (WSL, Docker, LXC).
-8. **Sikkerhedsstatus** — installerer `debian-security-support` (én gang) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
-9. **Rapport** — oversigt over alt ovenstående, support-ur, genstart-advarsel og sti til logfilen
+Messages are in Danish when the system language is Danish (`LANG=da_*`) and in English otherwise. You can force a language with `--lang=da` or `--lang=en`, or with `UI_LANG` in the settings file. apt's own output in the log is always English, because the report reads apt's summary line.
 
-## Brug
+## What the script does
+
+0. **Pre-check** — checks disk space and stops below 1 GB free
+1. **Repair** — `dpkg --configure -a` and `apt-get --fix-broken install`
+2. **apt-get update** — fetches the package lists; a source that cannot be fetched is shown in red (plain apt only warns)
+3. **apt-get full-upgrade** — full system upgrade; packages that are kept back are listed by name
+4. **flatpak update** — updates Flatpak apps and runtimes, if Flatpak is installed
+5. **apt-get autoremove --purge** — removes unused packages and their configuration
+6. **apt-get clean** — clears downloaded .deb files
+7. **Firmware** — fetches LVFS metadata and applies firmware updates via `fwupdmgr`, if fwupd is installed. It never reboots on its own and never sends reports to LVFS. Skipped in containers (WSL, Docker, LXC).
+8. **Security status** — installs `debian-security-support` once and shows which installed packages have lost or have limited security support
+9. **Report** — a summary of all of the above, the support clock, a restart notice and the path to the log
+
+## Usage
 
 ```bash
-sudo bash update_system.sh           # interaktiv
-sudo bash update_system.sh --auto    # ikke-interaktiv (cron / automation)
+sudo bash update_system.sh               # interactive
+sudo bash update_system.sh --auto        # non-interactive (cron / automation)
+sudo bash update_system.sh --lang=en     # force English (or --lang=da for Danish)
+bash update_system.sh --help
 ```
 
-Eller gør scriptet eksekverbart én gang:
+Or make it executable once:
 
 ```bash
 chmod +x update_system.sh
 sudo ./update_system.sh
 ```
 
-### Hvad `--auto` gør
+### What `--auto` does
 
-Uden `--auto` opfører scriptet sig som en normal terminalkørsel: hvis en pakke stiller et spørgsmål (typisk "din konfigurationsfil er ændret — behold din eller tag pakkens nye?"), venter den på dit svar, og til sidst venter den på ENTER.
+Without `--auto` the script behaves like a normal terminal run. If a package asks a question (typically "your config file was changed, keep yours or take the package's new one?"), it waits for your answer, and at the end it waits for ENTER.
 
-Med `--auto` sidder der ingen ved tastaturet, så scriptet:
+With `--auto` nobody is at the keyboard, so the script:
 
-- sætter `DEBIAN_FRONTEND=noninteractive`, så debconf aldrig stiller spørgsmål, men bruger standardsvaret
-- giver dpkg `--force-confdef --force-confold`, så en konfigurationsfil-konflikt løses ved at **beholde din nuværende fil** (pakkens nye version gemmes ved siden af som `*.dpkg-dist`)
-- springer den afsluttende ENTER over og returnerer 1, hvis der var fejl
+- sets `DEBIAN_FRONTEND=noninteractive`, so debconf never asks but uses the default answer
+- gives dpkg `--force-confdef --force-confold`, so a config-file conflict is resolved by **keeping your current file** (the package's new version is saved next to it as `*.dpkg-dist`)
+- skips the final ENTER and exits with code 1 if there were errors
 
-Uden dette kan en cron-kørsel hænge for evigt på et spørgsmål, ingen ser.
+Without this, a cron run can hang forever on a question nobody sees.
 
-## Egne indstillinger
+## Personal settings
 
-Vil du ændre advarselsgrænserne eller skrive din egen huskeseddel til support-uret, så læg dem i `/etc/default/debian-system-updater`. Filen er valgfri, og den overskrives ikke, når du henter en ny version af scriptet. Eksempel:
+To change the warning thresholds, the language or your own reminder for the support clock, put them in `/etc/default/debian-system-updater`. The file is optional and is not overwritten when you download a new version of the script. Example:
 
 ```bash
 # /etc/default/debian-system-updater
+UI_LANG=en
 LTS_WARN_DAYS=60
-LTS_END_NOTE="Det gamle NVIDIA-kort virker kun med Debian 12. Plan: nyt grafikkort eller ny pc."
+LTS_END_NOTE="The old NVIDIA card only works with Debian 12. Plan: new graphics card or new PC."
 ```
 
-## Eksempel på slutrapport
+## Example report
 
-Fra en testkørsel på Debian 13 med 41 ventende opdateringer, hvor én pakke var sat på hold:
+From a run on a Debian 12 laptop:
 
 ```
 ══════════════════════════════════════════════════
-  RAPPORT  │  2026-09-27 09:35:02  │  varighed 0m 49s
+  REPORT  │  2026-09-27 15:18:32  │  duration 0m 11s
 ══════════════════════════════════════════════════
-  Pakkekilder:                     OK
-  Pakker opgraderet:               40
-  Pakker nyinstalleret:            0
-  Pakker fjernet:                  0
-  Pakker holdt tilbage:            1 — tzdata
-  Fastholdte pakker (hold):        1 — tzdata
-  Flatpak:                         ikke installeret
-  Firmware:                        fwupd ikke installeret
-  Sikkerhedssupport:               alle installerede pakker er dækket
-  Automatiske opdateringer:        ikke aktiv
-  Diskplads ledig:                 956G
-  Fejl:                            Ingen
+  Package sources:                 OK
+  Packages upgraded:               0
+  Packages newly installed:        0
+  Packages removed:                0
+  Packages kept back:              0
+  Packages on hold:                1 — heroic
+  Flatpak apps updated:            0  (new: 0, removed: 0)
+  Flatpak runtimes updated:        0  (new: 0, removed: 0)
+  Firmware:                        none relevant (Secure Boot lists cannot be updated, and Secure Boot is off)
+  Security support:                2 WITHOUT support (intel-mediasdk mbedtls), 7 limited
+  Automatic updates:               active — 11 nightly runs / 21 packages in this month's log, last 2026-09-26
+  Free disk space:                 24G
+  Errors:                          None
 ══════════════════════════════════════════════════
 
-  🗓  Debian 13: fuld sikkerhedssupport til 2028-08-09 (681 dage), derefter LTS til 2030-06-30 — 1371 dage tilbage
+  🗓  Debian 12 LTS: security updates until 2028-06-30 — 641 days left
 
-  📋 Fuld log: /var/log/debian-updater.log
+  📋 Full log: /var/log/debian-updater.log
 ```
 
-På Debian 12, der allerede er i LTS-perioden, ser support-linjen sådan ud:
+On Debian 13, which still has full support, the clock shows both phases:
 
 ```
-  🗓  Debian 12 LTS: sikkerhedsopdateringer til 2028-06-30 — 641 dage tilbage
+  🗓  Debian 13: full security support until 2028-08-09 (681 days), then LTS until 2030-06-30 — 1371 days left
 ```
 
-Linjerne betyder:
+What the lines mean:
 
-- **Pakker holdt tilbage** — pakker apt ville opgradere, men ikke måtte (typisk fordi de er sat på hold). De får heller ikke sikkerhedsrettelser, så tallet bør normalt være 0.
-- **Fastholdte pakker (hold)** — alt hvad `apt-mark showhold` viser.
-- **Firmware** — én linje pr. enhed med nuværende og ny version. "kan ikke opdateres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det; fwupd's begrundelse står med (typisk for lidt plads i UEFI-variabellageret på ældre maskiner). Scriptet læser selv Secure Boot-status fra firmwaren: er det kun Secure Boot-listerne (db/dbx), der afvises, og Secure Boot er slået fra, er det uden betydning og vises som "ingen relevante". Er Secure Boot slået til, får du en advarsel.
-- **Sikkerhedssupport** — fra `check-support-status`. "UDEN support" er alvorligt: fjern pakken, hvis du ikke bruger den. "Begrænset" er til orientering (typisk "kun til betroet indhold").
-- **Automatiske opdateringer** — om `unattended-upgrades` kører om natten. Gør den det, er det normalt, at en manuel kørsel finder få eller ingen Debian-opdateringer: de er allerede installeret.
+- **Packages kept back** — packages apt wanted to upgrade but was not allowed to (usually because they are on hold). They get no security fixes either, so this should normally be 0.
+- **Packages on hold** — everything `apt-mark showhold` lists.
+- **Firmware** — one line per device with the current and the new version. "cannot be updated" means fwupd found something on LVFS, but the machine's firmware rejected it; fwupd's reason is shown (on older machines usually too little space in the UEFI variable store). The script reads the Secure Boot state from the firmware itself: if only the Secure Boot lists (db/dbx) are rejected and Secure Boot is off, this does not matter and shows as "none relevant". If Secure Boot is on, you get a warning.
+- **Security support** — from `check-support-status`. "WITHOUT support" is serious: remove the package if you don't use it. "limited" is for information (typically "only for trusted content").
+- **Automatic updates** — whether `unattended-upgrades` runs at night. If it does, it is normal that a manual run finds few or no Debian updates: they are already installed.
 
-## Support-uret
+## Support clock
 
-Nederst i rapporten står, hvor længe din Debian-udgave får sikkerhedsopdateringer. Så længe udgaven har fuld support, vises begge datoer; i LTS-perioden kun slutdatoen. En måned før overgangen til LTS kommer en gul note, fordi LTS ikke dækker alle pakker (trin 8 viser hvilke).
+At the bottom of the report you can see how long your Debian release gets security updates. While the release has full support, both dates are shown; during the LTS period only the end date. A month before the move to LTS a yellow note appears, because LTS does not cover every package (step 8 shows which).
 
-Advarslerne tæller ned mod slutdatoen: gul ved 30 dage eller færre (`LTS_WARN_DAYS`), rød ved 7 dage eller færre (`LTS_ALARM_DAYS`) og efter datoen. Begge grænser og huskesedlen `LTS_END_NOTE` kan sættes i din egen indstillingsfil.
+The warnings count down to the end date: yellow at 30 days or fewer (`LTS_WARN_DAYS`), red at 7 days or fewer (`LTS_ALARM_DAYS`) and after the date. Both thresholds and the reminder text `LTS_END_NOTE` can be set in your settings file.
 
 ## Log
 
-Scriptet logger al output til `/var/log/debian-updater.log` (roteres til `.1` ved 5 MB). Se loggen med:
+The script writes all output to `/var/log/debian-updater.log` (rotated to `.1` at 5 MB). To read it:
 
 ```bash
 tail -100 /var/log/debian-updater.log
 ```
 
-apt's eget output i loggen er på engelsk, uanset systemets sprog. Det er med vilje: rapportens tællere læser apt's statuslinje, og det virker kun på engelsk. Scriptets egne beskeder er på dansk.
+## Requirements
 
-## Krav
+- Debian 12 (bookworm) or Debian 13 (trixie)
+- Root rights (`sudo`)
+- Flatpak and fwupd are optional and detected automatically (`sudo apt-get install fwupd` for the firmware step)
+- `debian-security-support` is installed automatically the first time if it is missing
+- No dependencies beyond standard Debian tools
 
-- Debian 12 (bookworm) eller Debian 13 (trixie)
-- Root-rettigheder (`sudo`)
-- Flatpak og fwupd er valgfrie og detekteres automatisk (`sudo apt-get install fwupd` for firmware-trinnet)
-- `debian-security-support` installeres automatisk første gang, hvis den mangler
-- Ingen eksterne afhængigheder ud over standard Debian-værktøjer
+In a container (WSL, Docker, LXC) the firmware step is skipped, because the firmware belongs to the host and the fwupd service does not start there.
 
-I en container (WSL, Docker, LXC) springes firmware-trinnet over, fordi firmwaren tilhører værtsmaskinen, og fwupd-tjenesten starter slet ikke der.
+If you use an application firewall such as OpenSnitch, `/usr/bin/fwupdmgr` must be allowed to reach the internet, otherwise the firmware metadata cannot be fetched. The script shows this as a warning in the report.
 
-Bruger du et program-firewall som OpenSnitch, skal `/usr/bin/fwupdmgr` have lov til at gå på nettet, ellers kan firmware-metadata ikke hentes. Scriptet viser det som en advarsel i rapporten.
+## License
+
+[MIT](LICENSE). You may use, change and share the script freely, also commercially, as long as the copyright notice and the license text stay with it. It comes without any warranty.
