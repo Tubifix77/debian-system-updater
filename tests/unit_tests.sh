@@ -176,6 +176,104 @@ printf 'app/a/x86_64/stable\tc1\napp/b/x86_64/stable\tc9\napp/d/x86_64/stable\tc
 check "flatpak: updated, new, removed"      eq "$(fp_count "${WORK}/fp-before.txt" "${WORK}/fp-after.txt")" "1 1 1"
 check "flatpak: nothing changed"            eq "$(fp_count "${WORK}/fp-before.txt" "${WORK}/fp-before.txt")" "0 0 0"
 
+# run_skippable reads keys from TTY_DEVICE; here a file stands in for the keyboard
+skip_with() {   # skip_with KEYS AUTO COMMAND... : prints "exit-code skipped seconds"
+  printf '%b' "$1" > "${WORK}/keys"
+  (
+    TTY_DEVICE="${WORK}/keys"
+    AUTO=$2
+    shift 2
+    start=${SECONDS}
+    run_skippable "test" "" "$@"
+    rc=$?
+    echo "${rc} ${SKIPPED} $(( SECONDS - start ))"
+  )
+}
+read -r rc skipped secs < <(skip_with '\e' false sleep 20)
+check "skip: ESC stops the command"         eq "${skipped}/$(( rc != 0 ))" "true/1"
+check "skip: ESC stops it at once"          test "${secs}" -lt 5
+check "skip: arrow key does not skip"       eq "$(skip_with '\e[A' false sleep 1 | cut -d' ' -f1-2)" "0 false"
+check "skip: F1 key (ESC O P) does not skip" eq "$(skip_with '\eOP' false sleep 1 | cut -d' ' -f1-2)" "0 false"
+read -r rc skipped secs < <(skip_with '\e\004' false sleep 20)
+check "skip: ESC followed by other input still skips" eq "${skipped}" "true"
+check "skip: other keys do not skip"        eq "$(skip_with 'x\n' false true | cut -d' ' -f1-2)" "0 false"
+check "skip: --auto never reads keys"       eq "$(skip_with '\e' true true | cut -d' ' -f1-2)" "0 false"
+check "skip: exit code is passed on"        eq "$(skip_with '' false false | cut -d' ' -f1-2)" "1 false"
+printf '' > "${WORK}/keys"
+check "skip: output copy and exit code" eq "$(TTY_DEVICE="${WORK}/keys" AUTO=false; \
+  run_skippable test "${WORK}/copy.txt" bash -c 'echo hello; exit 3' > /dev/null; echo "$? $(cat "${WORK}/copy.txt")")" "3 hello"
+read -r rc skipped secs < <(skip_with '\e' false bash -c 'sleep 21; echo never')
+check "skip: ESC stops a command with children" eq "${skipped}/$(( secs < 5 ))" "true/1"
+left_running() {   # left_running WORDS : succeeds when a process with this command line exists
+  local f
+  for f in /proc/[0-9]*/cmdline; do
+    [[ "$(tr '\0' ' ' < "${f}" 2> /dev/null)" == "$1 " ]] && return 0
+  done
+  return 1
+}
+check "skip: no child is left running"      bash -c "sleep 1; $(declare -f left_running); ! left_running 'sleep 21'"
+set -m
+bash -c 'sleep 4 & x=$(head -c 3000000 /dev/zero | tr "\000" a); sleep 4; wait' &
+group=$!
+set +m
+sleep 1
+check "process group: members are found"    test "$(proc_group "${group}" | wc -l)" -ge 3
+check "process group: reads and writes are counted" test "$(group_io "${group}")" -ge 3000000
+kill -TERM -- "-${group}"
+wait "${group}" 2> /dev/null
+check "process group: none left after stopping it" test "$(proc_group "${group}" | wc -l)" -eq 0
+check "skip: skipped app is listed, no error" \
+  eq "$(ERRORS=0; FP_SKIPPED="a"; SKIPPED=true; fp_after_run 143 b > /dev/null; echo "${ERRORS} ${FP_SKIPPED}")" "0 a b"
+check "skip: a failed update is an error"   \
+  eq "$(ERRORS=0; FP_SKIPPED=""; SKIPPED=false; fp_after_run 1 b > /dev/null; echo "${ERRORS} [${FP_SKIPPED}]")" "1 []"
+
+# step_flatpak with a stub flatpak: three waiting updates, the second one hangs
+cat > "${WORK}/fp-step.sh" <<EOF
+cd "$(pwd)" || exit 2
+. ./update_system.sh
+EOF
+cat >> "${WORK}/fp-step.sh" <<'EOF'
+UI_LANG=en; AUTO=false; ERRORS=0; FP_SKIPPED=""; TMP=$(mktemp -d); STALL_SECONDS=2
+flatpak() {
+  case "$1" in
+    remote-ls) [[ -n "${FP_REFS}" ]] && printf '%s\n' ${FP_REFS} ;;
+    update) echo "UPDATE ${4:-ALL}" >> "${FP_LOG}"
+            [[ "${4:-}" == *Stuck* ]] && exec sleep 30 ;;
+  esac
+  return 0
+}
+step_flatpak
+echo "RESULT skipped=[${FP_SKIPPED}] errors=${ERRORS}"
+if [[ -n "${FP_REFS}" ]]; then
+  # A download that keeps moving must never get the hint
+  run_skippable Busy "" bash -c 'for i in 1 2 3 4 5 6 7 8; do head -c 300000 /dev/zero > /dev/null; sleep 0.5; done'
+fi
+rm -rf "${TMP}"
+EOF
+export FP_LOG="${WORK}/fp-log.txt"
+export FP_REFS=""
+: > "${FP_LOG}"
+bash "${WORK}/fp-step.sh" > "${WORK}/fp-out.txt" 2>&1 < /dev/null
+check "flatpak step: no list means one plain update" eq "$(cat "${FP_LOG}")" "UPDATE ALL"
+check "flatpak step: no list, no ESC hint"  bash -c "! grep -q 'Press ESC' '${WORK}/fp-out.txt'"
+if command -v script > /dev/null; then
+  export FP_REFS="app/org.example.Fast/x86_64/stable app/org.example.Stuck/x86_64/stable runtime/org.example.Late/x86_64/24.08"
+  : > "${FP_LOG}"
+  start=${SECONDS}
+  { sleep 5; printf '\033'; sleep 6; } | script -qec "bash ${WORK}/fp-step.sh" /dev/null > "${WORK}/fp-out.txt" 2>&1
+  secs=$(( SECONDS - start ))
+  check "flatpak step: every update is tried" eq "$(tr '\n' ' ' < "${FP_LOG}")" \
+    "UPDATE app/org.example.Fast/x86_64/stable UPDATE app/org.example.Stuck/x86_64/stable UPDATE runtime/org.example.Late/x86_64/24.08 "
+  check "flatpak step: ESC skips only the hung one" grep -q 'RESULT skipped=\[org.example.Stuck\] errors=0' "${WORK}/fp-out.txt"
+  check "flatpak step: hint appears when stuck" grep -q 'No progress for 2 s. Press ESC to skip org.example.Stuck.' "${WORK}/fp-out.txt"
+  check "flatpak step: hint only for the stuck one" eq "$(grep -c 'No progress' "${WORK}/fp-out.txt")" "1"
+  check "flatpak step: shows progress"       grep -q 'org.example.Stuck (2/3)' "${WORK}/fp-out.txt"
+  check "flatpak step: does not wait for the hung one" test "${secs}" -lt 15
+else
+  echo "SKIP  flatpak step in a real terminal (script(1) not installed)"
+  SKIPS=$(( SKIPS + 1 ))
+fi
+
 # ─── Firmware ─────────────────────────────────────────────────────────────────
 cat > "${WORK}/fw.json" <<'EOF'
 {

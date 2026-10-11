@@ -147,10 +147,19 @@ check "E: exactly one error counted"                 matches 'Errors: +1 '
 
 # Run F: an interactive run in a terminal; TAB at the end opens the settings
 # screen, 3 switches the security-support check back to its default, G saves
-# and ENTER exits
+# and ENTER exits. The keys are typed once the end prompt shows: keys typed
+# earlier would reach the ESC watcher of the download steps instead.
 settings 'FIRMWARE_UPDATES=off' 'INSTALL_SECURITY_SUPPORT=no'
 RUN_NAME=f
-printf '\t3g\n' | script -qec "bash $SCRIPT --lang=en" /dev/null > /tmp/updater-test-f.log 2>&1
+: > /tmp/updater-test-f.log
+# shellcheck disable=SC2094  # reading the log while script writes it is the point
+{
+    for _ in $(seq 300); do
+        grep -q 'Press ENTER to exit' /tmp/updater-test-f.log && break
+        sleep 1
+    done
+    printf '\t3g\n'
+} | script -qec "bash $SCRIPT --lang=en" /dev/null > /tmp/updater-test-f.log 2>&1
 RC=$?
 OUT=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/updater-test-f.log)
 check "F: interactive run exits 0"                   exit_is 0

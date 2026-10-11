@@ -114,12 +114,24 @@ Datoerne i tabellen ovenfor kommer fra `distro-info-data`, [debian.org/releases]
 1. **Reparation** — `dpkg --configure -a` og `apt-get --fix-broken install`
 2. **apt-get update** — henter pakkelister; en kilde der ikke kan hentes vises i rødt
 3. **apt-get full-upgrade** — fuld systemopgradering; pakker der holdes tilbage nævnes ved navn
-4. **flatpak update** — opdaterer Flatpak-apps og -runtimes, hvis Flatpak er installeret
+4. **flatpak update** — opdaterer Flatpak-apps og -runtimes én ad gangen, hvis Flatpak er installeret, så en der hænger kan [springes over med ESC](#en-download-der-hænger) uden at holde resten tilbage
 5. **apt-get autoremove --purge** — fjerner ubrugte pakker og deres konfiguration
 6. **apt-get clean** — rydder op i downloadede .deb-filer
 7. **Firmware** — henter LVFS-metadata og tjekker for firmware-opdateringer via `fwupdmgr`, hvis fwupd er installeret. Som standard spørger det, før noget installeres (se `FIRMWARE_UPDATES`). Springes over i containere (WSL, Docker, LXC), hvor firmwaren tilhører værtsmaskinen.
 8. **Sikkerhedsstatus** — installerer `debian-security-support` én gang (medmindre `INSTALL_SECURITY_SUPPORT=no`) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
 9. **Rapport** — alt ovenstående på én skærm, support-uret, genstart-advarsel og sti til logfilen; derefter afslutter ENTER, og TAB åbner [indstillingsskærmen](#indstillinger)
+
+### En download der hænger
+
+En download, der går i stå halvvejs, kan få et trin til at vente for evigt uden nogen fejl. Når et trin, der kun henter data, ikke er kommet videre i 15 sekunder, kommer en linje frem:
+
+```
+  ⏸ Ingen fremgang i 15 sek. — tryk ESC for at springe org.azahar_emu.Azahar over.
+```
+
+ESC stopper kun den download, og kørslen fortsætter. En oversprunget Flatpak-app nævnes i rapporten og prøves igen ved næste kørsel; springes pakkelisterne eller firmware-metadata over, bruger kørslen de lister og data, der allerede ligger på maskinen. En oversprunget download tæller ikke som en fejl. "Ingen fremgang" bliver målt, ikke gættet: linjen kommer kun, når trinnets processer næsten intet har læst eller skrevet i 15 sekunder, så en stor download, der bevæger sig, udløser den aldrig.
+
+ESC virker i trin 2 (pakkelister), 4 (hver Flatpak-app eller -runtime) og 7 (firmware-metadata). Den virker med vilje **ikke**, mens apt installerer eller fjerner pakker, eller mens firmware installeres: stoppes dpkg halvvejs, kan systemet gå i stykker, og stoppes en firmware-opdatering, kan hardwaren blive ubrugelig. apts egne downloads giver selv op med en fejl efter en timeout. I `--auto`-kørsler kan ingen trykke på en tast, så trinnene kører bare.
 
 ## Brug
 
@@ -163,7 +175,7 @@ Den åbner som en lille editor i terminalen:
 
 ```
 ═════════════════════════════════════════════════════════
-  Indstillinger  │  Debian System Updater v1.7.0
+  Indstillinger  │  Debian System Updater v1.8.0
 ═════════════════════════════════════════════════════════
 
   1  Sprog                      Automatisk (dansk)
@@ -216,6 +228,7 @@ FIRMWARE_UPDATES=check        # ask, install, check eller off (standard ask)
 - **Pakker holdt tilbage** — pakker apt ville opgradere, men ikke måtte (typisk fordi de er sat på hold). De får heller ikke sikkerhedsrettelser, så tallet bør normalt være 0.
 - **Fastholdte pakker (hold)** — alt hvad `apt-mark showhold` viser.
 - **Firmware** — én linje pr. enhed med nuværende og ny version. "kan ikke opdateres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det; fwupd's begrundelse står med (typisk for lidt plads i UEFI-variabellageret på ældre maskiner). Er det kun Secure Boot-listerne (db/dbx), der afvises, og Secure Boot er slået fra, er det uden betydning og vises som "ingen relevante". Er Secure Boot slået til, får du en advarsel.
+- **Flatpak sprunget over** — vises kun, når du har trykket ESC i trin 4 ([hvorfor](#en-download-der-hænger)). Ikke en fejl: opdateringen prøves bare igen ved næste kørsel. Er pakkelisterne sprunget over, står det med gult under **Pakkekilder**.
 - **Sikkerhedssupport** — fra `check-support-status`. "UDEN support" er alvorligt: fjern pakken, hvis du ikke bruger den. "Begrænset" er til orientering (typisk "kun til betroet indhold").
 - **Automatiske opdateringer** — om `unattended-upgrades` kører om natten. Gør den det, er det normalt, at en manuel kørsel finder få eller ingen Debian-opdateringer: de er allerede installeret.
 
@@ -252,7 +265,7 @@ Scriptet er opbygget med én funktion pr. trin og en `main`-funktion efter [Goog
 Hvert push kører [CI-workflowet](.github/workflows/ci.yml):
 
 - **ShellCheck** på alle scripts, på alle niveauer.
-- **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
+- **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, registrering af en download der hænger og ESC-spring (også tastet ind i en rigtig terminal), firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
 - **Integrationstest** i `tests/run_tests.sh`, der kører det rigtige script i rene Debian 12- og Debian 13-containere i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde, håndteringen af tilvalg og indstillingsskærmen, betjent i en rigtig terminal.
 
 Integrationstestene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:

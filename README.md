@@ -114,12 +114,24 @@ The dates in the table above come from `distro-info-data`, [debian.org/releases]
 1. **Repair** — `dpkg --configure -a` and `apt-get --fix-broken install`
 2. **apt-get update** — fetches the package lists; a source that cannot be fetched is shown in red
 3. **apt-get full-upgrade** — full system upgrade; packages that are kept back are named
-4. **flatpak update** — updates Flatpak apps and runtimes, if Flatpak is installed
+4. **flatpak update** — updates Flatpak apps and runtimes one at a time, if Flatpak is installed, so a stuck one can be [skipped with ESC](#a-download-that-hangs) without holding up the rest
 5. **apt-get autoremove --purge** — removes unused packages and their configuration
 6. **apt-get clean** — clears downloaded .deb files
 7. **Firmware** — refreshes LVFS metadata and checks for firmware updates via `fwupdmgr`, if fwupd is installed. By default it asks before installing anything (see `FIRMWARE_UPDATES`). Skipped in containers (WSL, Docker, LXC), where the firmware belongs to the host.
 8. **Security status** — installs `debian-security-support` once (unless `INSTALL_SECURITY_SUPPORT=no`) and shows which installed packages have lost or have limited security support
 9. **Report** — everything above on one screen, the support clock, a restart notice and the path to the log; then ENTER exits and TAB opens the [settings screen](#settings)
+
+### A download that hangs
+
+A download that stalls halfway can make a step wait for ever without any error. When a step that only downloads has made no progress for 15 seconds, a line appears:
+
+```
+  ⏸ No progress for 15 s. Press ESC to skip org.azahar_emu.Azahar.
+```
+
+ESC stops just that download and the run carries on. A skipped Flatpak app is named in the report and tried again on the next run; a skipped package-list or firmware-metadata download means that run uses the lists and data already on the machine. A skip is not counted as an error. "No progress" is measured, not guessed: the line only appears when the step's processes have read and written almost nothing for 15 seconds, so a large download that is moving never triggers it.
+
+ESC works in steps 2 (package lists), 4 (each Flatpak app or runtime) and 7 (firmware metadata). It deliberately does **not** work while apt installs or removes packages, or while firmware is being installed: stopping dpkg halfway can leave the system broken, and stopping a firmware flash can make the hardware unusable. apt's own downloads give up with an error by themselves after a timeout. In `--auto` runs nobody can press a key, so steps just run.
 
 ## Usage
 
@@ -163,7 +175,7 @@ It opens like a small editor in the terminal:
 
 ```
 ═════════════════════════════════════════════════════════
-  Settings  │  Debian System Updater v1.7.0
+  Settings  │  Debian System Updater v1.8.0
 ═════════════════════════════════════════════════════════
 
   1  Language                   Automatic (English)
@@ -215,6 +227,7 @@ FIRMWARE_UPDATES=check        # ask, install, check or off (default ask)
 
 - **Packages kept back** — packages apt wanted to upgrade but was not allowed to (usually because they are on hold). They get no security fixes either, so this should normally be 0.
 - **Packages on hold** — everything `apt-mark showhold` lists.
+- **Flatpak skipped** — only shown when you pressed ESC during step 4 ([why](#a-download-that-hangs)). Not an error: the update is simply tried again on the next run. A skipped package-list download shows in yellow under **Package sources**.
 - **Firmware** — one line per device with the current and the new version. "cannot be updated" means fwupd found something on LVFS, but the machine's firmware rejected it; fwupd's reason is shown (on older machines usually too little space in the UEFI variable store). If only the Secure Boot lists (db/dbx) are rejected and Secure Boot is off, this does not matter and shows as "none relevant". If Secure Boot is on, you get a warning.
 - **Security support** — from `check-support-status`. "WITHOUT support" is serious: remove the package if you don't use it. "limited" is for information (typically "only for trusted content").
 - **Automatic updates** — whether `unattended-upgrades` runs at night. If it does, it is normal that a manual run finds few or no Debian updates: they are already installed.
@@ -252,7 +265,7 @@ The script is organised as one function per step with a `main` function, followi
 Every push runs the [CI workflow](.github/workflows/ci.yml):
 
 - **ShellCheck** on all scripts, at every severity.
-- **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
+- **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the stall detection and ESC skip (also typed into a real terminal), the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
 - **Integration tests** in `tests/run_tests.sh`, which run the real script in clean Debian 12 and Debian 13 containers in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source, the option handling, and the settings screen typed into a real terminal.
 
 The integration tests change system settings, so they refuse to run anywhere but a throwaway container or VM with `UPDATER_TESTS=1`:

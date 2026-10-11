@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.0 — 2026-10-11
+
+### Added
+- **A stuck download can be skipped with ESC.** A download that stalls can make a step wait for ever without an error (seen with a Flathub download in October 2026). When a step that only downloads has made no progress for 15 seconds, a line appears: "No progress for 15 s. Press ESC to skip …". Progress is measured from what the step's processes read and write (network included), so a large download that is moving never triggers it. This works in step 2 (package lists), step 4 (each Flatpak app or runtime) and step 7 (firmware metadata). It deliberately never works while apt installs or removes packages or while firmware is installed, because stopping those halfway can break the system or the hardware.
+- Step 4 updates the waiting Flatpak apps and runtimes one at a time, so ESC skips only the one that hangs and the rest still update. When Flatpak cannot list the waiting updates, it falls back to one plain `flatpak update`, so errors are still reported as before.
+- A skip is not counted as an error. A skipped Flatpak app gets its own yellow report line ("Flatpak skipped: … — tried again next time"); skipped package lists show in yellow under Package sources.
+- ESC stops the step's whole process group, also helpers started at that very moment. Arrow keys are ignored, `--auto` runs never read keys, and Ctrl+C still stops the whole run.
+- Unit tests for the key handling, the progress measurement and the process group, and a test that types ESC into a real terminal with `script` while a stub Flatpak update hangs. The progress measurement reads `/proc` directly, because minimal Debian systems have no `ps`.
+
+---
+
 ## v1.7.0 — 2026-09-27
 
 ### Added

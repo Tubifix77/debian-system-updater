@@ -20,7 +20,7 @@
 # the final report. Function-local variables are lower case.
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly UPDATER_VERSION="1.7.0"
+readonly UPDATER_VERSION="1.8.0"
 readonly CONFIG_FILE="/etc/default/debian-system-updater"
 readonly LINE_WIDTH=57   # the longest title ends at column 54; 3 characters of margin
 readonly RED='\033[0;31m' YELLOW='\033[1;33m' GREEN='\033[0;32m'
@@ -58,6 +58,11 @@ DISTRO_INFO_CSV="/usr/share/distro-info/debian.csv"   # Debian's release dates
 # The terminal the settings screen uses when opened at the end of a run, so its
 # screens stay out of the log (the tests point it elsewhere)
 TTY_DEVICE=/dev/tty
+
+# A skippable step counts as stuck when its processes read and write less than
+# STALL_BYTES in STALL_SECONDS; then the ESC hint appears (the tests shorten it)
+STALL_SECONDS=15
+STALL_BYTES=4096
 
 # ─── Output helpers ───────────────────────────────────────────────────────────
 ok()   { echo -e "${GREEN}✓ $*${NC}"; }
@@ -332,12 +337,13 @@ start_log() {
 #######################################
 init_counters() {
   ERRORS=0
-  SOURCES_STATUS="OK"
+  SOURCES_STATUS="OK"; SOURCES_COLOR=${RED}
   APT_UPGRADED=0; APT_INSTALLED=0; APT_REMOVED=0; APT_KEPT=0; KEPT_LIST=""
   AUTOREMOVED=0
   FP_APP_UPD=0; FP_APP_NEW=0; FP_APP_REM=0
   FP_RT_UPD=0; FP_RT_NEW=0; FP_RT_REM=0
   FLATPAK_INSTALLED=false
+  FP_SKIPPED=""; SKIPPED=false
   FIRMWARE_STATUS=$(t "fwupd ikke installeret" "fwupd not installed")
   FW_REBOOT=false
   SUPPORT_STATUS=$(t "ukendt" "unknown")
@@ -423,15 +429,24 @@ step_repair() {
 # Step 2: updates the package lists. With APT::Update::Error-Mode=any a source
 # that cannot be fetched counts as an error; plain apt only warns and returns
 # 0, so v1.1 showed a green tick even when the security archive was missing.
+# Only downloads happen here, so ESC may skip a stuck update (run_skippable).
 # Globals:
-#   TMP (read); SOURCES_STATUS, ERRORS (set)
+#   TMP, SKIPPED (read); SOURCES_STATUS, SOURCES_COLOR, ERRORS (set)
 #######################################
 step_update_lists() {
   local rc
   step "$(t "[2/8] Opdaterer pakkelister..." "[2/8] Updating package lists...")"
-  apt-get update -o APT::Update::Error-Mode=any 2>&1 | tee "${TMP}/update.txt"
-  rc=${PIPESTATUS[0]}
-  if (( rc != 0 )); then
+  run_skippable "$(t "pakkelisterne" "the package lists")" "${TMP}/update.txt" \
+    apt-get update -o APT::Update::Error-Mode=any
+  rc=$?
+  if [[ "${SKIPPED}" == true ]]; then
+    # apt replaces a list only when it is complete, so the old lists are intact
+    warn "$(t "Sprang pakkelisterne over — bruger dem, der allerede findes." \
+              "Skipped the package lists. Using the ones already present.")"
+    SOURCES_STATUS=$(t "sprunget over (ESC) — de gamle pakkelister blev brugt" \
+                       "skipped (ESC) — the old package lists were used")
+    SOURCES_COLOR=${YELLOW}
+  elif (( rc != 0 )); then
     fail "$(t "En eller flere pakkekilder kunne ikke hentes — fortsætter med de pakkelister, der findes:" \
               "One or more package sources could not be fetched. Continuing with the package lists available:")"
     grep -E '^(W|E): ' "${TMP}/update.txt" | sed 's/^/    /'
@@ -527,12 +542,163 @@ fp_count() {
 }
 
 #######################################
-# Step 4: updates Flatpak apps and runtimes and counts the changes.
+# Lists the Flatpak refs that have an update waiting.
+# Outputs:
+#   One ref per line on STDOUT, e.g. app/org.example.App/x86_64/stable.
+#######################################
+fp_pending_refs() {
+  flatpak remote-ls --updates --columns=ref 2>/dev/null
+}
+
+#######################################
+# Tells whether a key press can be read: not in --auto mode, and only when the
+# terminal can be opened (a cron run has none).
 # Globals:
-#   TMP (read); FLATPAK_INSTALLED, the FP_* counters, ERRORS (set)
+#   AUTO, TTY_DEVICE (read)
+# Returns:
+#   0 when keys can be read, 1 otherwise.
+#######################################
+can_read_keys() {
+  [[ "${AUTO}" != true ]] && { : < "${TTY_DEVICE}"; } 2>/dev/null
+}
+
+#######################################
+# Lists the live processes in a process group (zombies are left out: they
+# do nothing, and in containers nobody may clear them). Reads /proc
+# directly: minimal Debian systems have no ps. The state and group id are
+# the 1st and 3rd fields after the command name, which is in brackets and
+# may contain spaces.
+# Arguments:
+#   Process group id.
+# Outputs:
+#   One process id per line on STDOUT.
+#######################################
+proc_group() {
+  cat /proc/[0-9]*/stat 2>/dev/null \
+    | awk -v group="$1" '{ pid = $1; sub(/^.*\) /, ""); if ($3 == group && $1 != "Z") print pid }'
+}
+
+#######################################
+# Bytes a process group has read and written so far (rchar + wchar from
+# /proc/PID/io; network traffic counts too, so a running download moves it).
+# Arguments:
+#   Process group id.
+# Outputs:
+#   The byte count on STDOUT.
+#######################################
+group_io() {
+  local p
+  local -a files=()
+  while read -r p; do
+    files+=("/proc/${p}/io")
+  done < <(proc_group "$1")
+  cat "${files[@]}" /dev/null 2>/dev/null \
+    | awk '/^(rchar|wchar):/ {s += $2} END {printf "%.0f\n", s}'
+}
+
+#######################################
+# Runs a step that is safe to interrupt (a download, nothing being installed)
+# so that ESC can skip it. A download that stalls makes flatpak wait for ever
+# without an error (seen with a Flathub download in October 2026). The hint
+# only appears when the step has been stuck for STALL_SECONDS: its processes
+# read and wrote less than STALL_BYTES in that time. ESC works at any moment.
+# Arrow and function keys also start with ESC; they are recognised by the
+# "[" or "O" that follows at once and ignored. Without a terminal (--auto)
+# the command just runs. The command gets its own process group (job
+# control is switched on just for starting it), so ESC stops it with all
+# its helpers, also ones it starts at that very moment. Ctrl+C stops the
+# command too, and then the script.
+# Globals:
+#   TTY_DEVICE, STALL_SECONDS, STALL_BYTES (read); SKIPPED (set: true when
+#   ESC stopped the command)
+# Arguments:
+#   Name shown in the hint, file for a copy of the output ("" for none),
+#   the command and its arguments.
+# Outputs:
+#   The command's output on STDOUT, the hint when it is stuck.
+# Returns:
+#   The command's exit code.
+#######################################
+run_skippable() {
+  local name=$1 out=$2 pid key rest status fd="" io mark=0 quiet_since hinted=false
+  shift 2
+  SKIPPED=false
+  if can_read_keys; then
+    exec {fd}< "${TTY_DEVICE}"
+  fi
+  set -m
+  if [[ -n "${out}" ]]; then
+    { "$@" 2>&1 | tee "${out}"; exit "${PIPESTATUS[0]}"; } < /dev/null &
+  else
+    "$@" < /dev/null &
+  fi
+  pid=$!
+  set +m
+  # shellcheck disable=SC2064   # the pid must be expanded now
+  trap "kill -TERM -- -${pid} 2>/dev/null; exit 130" INT
+  quiet_since=${SECONDS}
+  while [[ -n "${fd}" ]] && kill -0 "${pid}" 2>/dev/null; do
+    IFS= read -rsn1 -t 1 -u "${fd}" key
+    status=$?
+    if (( status == 0 )) && [[ "${key}" == $'\e' ]]; then
+      rest=""
+      IFS= read -rsn8 -t 0.05 -u "${fd}" rest
+      if [[ "${rest}" != [\[O]* ]]; then          # not an arrow or function key
+        kill -TERM -- "-${pid}" 2>/dev/null
+        SKIPPED=true
+        break
+      fi
+    elif (( status > 0 && status <= 128 )); then
+      break                                       # no keyboard to read from
+    fi
+    io=$(group_io "${pid}")
+    if (( io - mark >= STALL_BYTES )); then
+      mark=${io}
+      quiet_since=${SECONDS}
+    elif [[ "${hinted}" == false ]] && (( SECONDS - quiet_since >= STALL_SECONDS )); then
+      echo -e "${YELLOW}  ⏸ $(t "Ingen fremgang i ${STALL_SECONDS} sek. — tryk ESC for at springe ${name} over." \
+                                "No progress for ${STALL_SECONDS} s. Press ESC to skip ${name}.")${NC}"
+      hinted=true
+    fi
+  done
+  wait "${pid}"
+  status=$?
+  trap - INT
+  if [[ -n "${fd}" ]]; then
+    exec {fd}<&-
+  fi
+  return "${status}"
+}
+
+#######################################
+# Reports how one Flatpak update ended: skipped by the user, failed or fine.
+# Globals:
+#   SKIPPED (read); FP_SKIPPED, ERRORS (set)
+# Arguments:
+#   Exit code, name shown to the user.
+#######################################
+fp_after_run() {
+  local rc=$1 name=$2
+  if [[ "${SKIPPED}" == true ]]; then
+    warn "$(t "Sprang ${name} over — prøves igen ved næste kørsel." \
+              "Skipped ${name}. It will be tried again on the next run.")"
+    FP_SKIPPED="${FP_SKIPPED:+${FP_SKIPPED} }${name}"
+  elif (( rc != 0 )); then
+    warn "$(t "Flatpak returnerede en fejl (${name})." "Flatpak returned an error (${name}).")"
+    add_error
+  fi
+}
+
+#######################################
+# Step 4: updates Flatpak apps and runtimes one at a time, so that ESC skips
+# only the one that hangs, and counts the changes. When flatpak cannot list
+# the waiting updates, everything is updated in one go (ESC skips it all).
+# Globals:
+#   TMP (read); FLATPAK_INSTALLED, the FP_* counters, FP_SKIPPED, ERRORS (set)
 #######################################
 step_flatpak() {
-  local rc eol
+  local eol ref name n=0
+  local -a refs
   step "$(t "[4/8] Flatpak-apps..." "[4/8] Flatpak apps...")"
   if ! command -v flatpak &> /dev/null; then
     t "Flatpak er ikke installeret — springer over." "Flatpak is not installed. Skipping."
@@ -543,11 +709,21 @@ step_flatpak() {
   FLATPAK_INSTALLED=true
   fp_snapshot --app > "${TMP}/app_before.txt"
   fp_snapshot --runtime > "${TMP}/rt_before.txt"
-  flatpak update -y --noninteractive 2>&1 | tee "${TMP}/flatpak.txt"
-  rc=${PIPESTATUS[0]}
-  if (( rc != 0 )); then
-    warn "$(t "Flatpak returnerede en fejl." "Flatpak returned an error.")"
-    add_error
+  mapfile -t refs < <(fp_pending_refs)
+  if (( ${#refs[@]} == 0 )); then
+    # Nothing listed (or the list failed): one plain run still reports errors
+    name=$(t "Flatpak-opdateringen" "the Flatpak update")
+    run_skippable "${name}" "" flatpak update -y --noninteractive
+    fp_after_run $? "${name}"
+  else
+    for ref in "${refs[@]}"; do
+      n=$(( n + 1 ))
+      name=${ref#*/}
+      name=${name%%/*}
+      echo -e "${BOLD}  → ${name} (${n}/${#refs[@]})${NC}"
+      run_skippable "${name}" "" flatpak update -y --noninteractive "${ref}"
+      fp_after_run $? "${name}"
+    done
   fi
   fp_snapshot --app > "${TMP}/app_after.txt"
   fp_snapshot --runtime > "${TMP}/rt_after.txt"
@@ -759,9 +935,14 @@ fw_handle_devices() {
 firmware_run() {
   local flags=(-y --no-unreported-check --no-metadata-check)
   local note="" rc summary=false
-  fwupdmgr refresh "${flags[@]}" 2>&1 | tee "${TMP}/fw_refresh.txt"
-  rc=${PIPESTATUS[0]}
-  if (( rc != 0 && rc != 2 )); then
+  run_skippable "$(t "firmware-metadata" "the firmware metadata")" "${TMP}/fw_refresh.txt" \
+    fwupdmgr refresh "${flags[@]}"
+  rc=$?
+  if [[ "${SKIPPED}" == true ]]; then
+    warn "$(t "Sprang firmware-metadata over — tjekker med de data, der allerede findes." \
+              "Skipped the firmware metadata. Checking with the data already present.")"
+    note=$(t " (metadata sprunget over)" " (metadata skipped)")
+  elif (( rc != 0 && rc != 2 )); then
     warn "$(t "Firmware-metadata fra LVFS kunne ikke hentes (kode ${rc}) — tjekker med de data, der allerede findes." \
               "Firmware metadata from LVFS could not be fetched (code ${rc}). Checking with the data already present.")"
     note=$(t " (metadata kunne ikke hentes — se log)" " (metadata could not be fetched, see log)")
@@ -1064,7 +1245,7 @@ print_report() {
   if [[ "${SOURCES_STATUS}" == "OK" ]]; then
     row "$(t "Pakkekilder:" "Package sources:")" "OK"
   else
-    rowc "$(t "Pakkekilder:" "Package sources:")" "${RED}" "${SOURCES_STATUS}"
+    rowc "$(t "Pakkekilder:" "Package sources:")" "${SOURCES_COLOR}" "${SOURCES_STATUS}"
   fi
   row "$(t "Pakker opgraderet:" "Packages upgraded:")" "${APT_UPGRADED}"
   row "$(t "Pakker nyinstalleret:" "Packages newly installed:")" "${APT_INSTALLED}"
@@ -1084,6 +1265,10 @@ print_report() {
         "${FP_APP_UPD}  ($(t "nye" "new"): ${FP_APP_NEW}, $(t "fjernet" "removed"): ${FP_APP_REM})"
     row "$(t "Flatpak-runtimes opdateret:" "Flatpak runtimes updated:")" \
         "${FP_RT_UPD}  ($(t "nye" "new"): ${FP_RT_NEW}, $(t "fjernet" "removed"): ${FP_RT_REM})"
+    if [[ -n "${FP_SKIPPED}" ]]; then
+      rowc "$(t "Flatpak sprunget over:" "Flatpak skipped:")" "${YELLOW}" \
+           "${FP_SKIPPED} — $(t "prøves igen næste gang" "tried again next time")"
+    fi
   else
     row "Flatpak:" "$(t "ikke installeret" "not installed")"
   fi
