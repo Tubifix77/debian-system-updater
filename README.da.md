@@ -121,6 +121,32 @@ Datoerne i tabellen ovenfor kommer fra `distro-info-data`, [debian.org/releases]
 8. **Sikkerhedsstatus** — installerer `debian-security-support` én gang (medmindre `INSTALL_SECURITY_SUPPORT=no`) og viser hvilke installerede pakker der har mistet eller har begrænset sikkerhedssupport
 9. **Rapport** — alt ovenstående på én skærm, support-uret, genstart-advarsel og sti til logfilen; derefter afslutter ENTER, og TAB åbner [indstillingsskærmen](#indstillinger)
 
+### Sidevinduet
+
+En interaktiv kørsel på et skrivebord åbner også et lille ekstra vindue med trinnene som en tjekliste, så du kan se med ét blik, hvor kørslen er, mens hovedvinduet viser hele outputtet som før:
+
+```
+════════════════════════════════
+  Opdatering  │  1:42
+════════════════════════════════
+  ✓ 1 Reparation
+  ✓ 2 Pakkelister
+  ✓ 3 Systemopgradering        4
+  ▶ 4 Flatpak                2/5
+      org.azahar_emu.Azahar
+  · 5 Oprydning
+  · 6 Pakke-cache
+  · 7 Firmware
+  · 8 Sikkerhedsstatus
+────────────────────────────────
+  [██████░░░░░░░░░░]  trin 4/8
+════════════════════════════════
+```
+
+✓ færdig, ⚠ færdig med en advarsel, ✗ fejl, – sprunget over (ikke installeret eller slået fra), ▶ kører. Når kørslen er færdig, siger vinduet det ("✓ FÆRDIG — ingen fejl", eller hvor mange fejl der var), og det lukker sammen med hovedvinduet, uanset om du trykker ENTER eller lukker det med X. Du kan også lukke sidevinduet for sig selv når som helst; kørslen afhænger ikke af det.
+
+Vinduet kører som skrivebordsbrugeren, ikke som root, og tegner kun en statusfil, som kørslen skriver. Det bruger `xfce4-terminal`, GNOME Terminal, Konsole eller Debians standardterminal, den første der findes. Det åbnes aldrig i `--auto`-kørsler eller uden et skrivebord (fx over SSH). Kan det ikke åbne, kører opdateringen videre som normalt.
+
 ### En download der hænger
 
 En download, der går i stå halvvejs, kan få et trin til at vente for evigt uden nogen fejl. Når et trin, der kun henter data, ikke er kommet videre i 15 sekunder, kommer en linje frem:
@@ -175,7 +201,7 @@ Den åbner som en lille editor i terminalen:
 
 ```
 ═════════════════════════════════════════════════════════
-  Indstillinger  │  Debian System Updater v1.8.0
+  Indstillinger  │  Debian System Updater v1.9.0
 ═════════════════════════════════════════════════════════
 
   1  Sprog                      Automatisk (dansk)
@@ -265,7 +291,7 @@ Scriptet er opbygget med én funktion pr. trin og en `main`-funktion efter [Goog
 Hvert push kører [CI-workflowet](.github/workflows/ci.yml):
 
 - **ShellCheck** på alle scripts, på alle niveauer.
-- **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, registrering af en download der hænger og ESC-spring (også tastet ind i en rigtig terminal), firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
+- **Enhedstest** i `tests/unit_tests.sh` af tolknings- og beslutningslogikken: sprogvalg, tilvalg, udgave og datoopslag, nedtællingen, optælling for apt og Flatpak, registrering af en download der hænger og ESC-spring (også tastet ind i en rigtig terminal), sidevinduets tegning og trin-status, firmware-JSON og Secure Boot-logikken, tolkning af sikkerhedssupport og opsummeringen af de natlige opdateringer. De indlæser scriptets funktioner uden at køre det, kræver ikke root og kan køres hvor som helst: `bash tests/unit_tests.sh`.
 - **Integrationstest** i `tests/run_tests.sh`, der kører det rigtige script i rene Debian 12- og Debian 13-containere i flere scenarier, blandt andet begge sprog, alle datokilder, advarselsgrenene, en utilgængelig pakkekilde, håndteringen af tilvalg og indstillingsskærmen, betjent i en rigtig terminal.
 
 Integrationstestene ændrer systemindstillinger, så de nægter at køre andre steder end i en container eller VM, der må smides væk, og kun med `UPDATER_TESTS=1`:

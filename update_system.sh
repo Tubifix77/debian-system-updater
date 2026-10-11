@@ -20,9 +20,10 @@
 # the final report. Function-local variables are lower case.
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly UPDATER_VERSION="1.8.0"
+readonly UPDATER_VERSION="1.9.0"
 readonly CONFIG_FILE="/etc/default/debian-system-updater"
 readonly LINE_WIDTH=57   # the longest title ends at column 54; 3 characters of margin
+readonly SIDE_WIDTH=32   # inner width of the side window (it opens 34 columns wide)
 readonly RED='\033[0;31m' YELLOW='\033[1;33m' GREEN='\033[0;32m'
 readonly CYAN='\033[0;36m' BOLD='\033[1m' NC='\033[0m'
 
@@ -327,7 +328,7 @@ start_log() {
   START_EPOCH=$(date +%s)
   exec > >(tee -a "${LOG_FILE}") 2>&1
   TMP=$(mktemp -d)
-  trap 'rm -rf "${TMP}"' EXIT
+  trap 'rm -rf "${TMP}"; [[ -n "${SIDE_DIR:-}" ]] && rm -rf "${SIDE_DIR}"' EXIT
 }
 
 #######################################
@@ -345,10 +346,13 @@ init_counters() {
   FLATPAK_INSTALLED=false
   FP_SKIPPED=""; SKIPPED=false
   FIRMWARE_STATUS=$(t "fwupd ikke installeret" "fwupd not installed")
+  FW_RAN=false; SUPPORT_CHECKED=false
   FW_REBOOT=false
   SUPPORT_STATUS=$(t "ukendt" "unknown")
   SUPPORT_COUNT=0; SUPPORT_ENDED=0; SUPPORT_LIMITED=0; SUPPORT_ENDED_LIST=""
   UU_STATUS=$(t "ikke aktiv" "not active")
+  SIDE_STATE=("" wait wait wait wait wait wait wait wait); SIDE_COUNT=()
+  SIDE_CUR=0; SIDE_SUB=""; SIDE_STALL=0; SIDE_END=""; SIDE_FILE=""
 }
 
 #######################################
@@ -610,7 +614,7 @@ group_io() {
 # command too, and then the script.
 # Globals:
 #   TTY_DEVICE, STALL_SECONDS, STALL_BYTES (read); SKIPPED (set: true when
-#   ESC stopped the command)
+#   ESC stopped the command), SIDE_STALL (set while the hint is shown)
 # Arguments:
 #   Name shown in the hint, file for a copy of the output ("" for none),
 #   the command and its arguments.
@@ -659,8 +663,14 @@ run_skippable() {
       echo -e "${YELLOW}  ⏸ $(t "Ingen fremgang i ${STALL_SECONDS} sek. — tryk ESC for at springe ${name} over." \
                                 "No progress for ${STALL_SECONDS} s. Press ESC to skip ${name}.")${NC}"
       hinted=true
+      SIDE_STALL=1
+      side_write
     fi
   done
+  if (( ${SIDE_STALL:-0} == 1 )); then
+    SIDE_STALL=0
+    side_write
+  fi
   wait "${pid}"
   status=$?
   trap - INT
@@ -721,6 +731,9 @@ step_flatpak() {
       name=${ref#*/}
       name=${name%%/*}
       echo -e "${BOLD}  → ${name} (${n}/${#refs[@]})${NC}"
+      SIDE_COUNT[4]="${n}/${#refs[@]}"
+      SIDE_SUB=${name}
+      side_write
       run_skippable "${name}" "" flatpak update -y --noninteractive "${ref}"
       fp_after_run $? "${name}"
     done
@@ -934,6 +947,7 @@ fw_handle_devices() {
 #######################################
 firmware_run() {
   local flags=(-y --no-unreported-check --no-metadata-check)
+  FW_RAN=true
   local note="" rc summary=false
   run_skippable "$(t "firmware-metadata" "the firmware metadata")" "${TMP}/fw_refresh.txt" \
     fwupdmgr refresh "${flags[@]}"
@@ -1086,6 +1100,7 @@ step_security_status() {
     return 0
   fi
   check-support-status > "${TMP}/support.txt" 2>&1
+  SUPPORT_CHECKED=true
   parse_support_status "${TMP}/support.txt"
   if (( SUPPORT_ENDED > 0 )); then
     echo -e "${YELLOW}$(t "Sikkerhedssupport er OPHØRT for (fjern dem, hvis du ikke bruger dem):" \
@@ -1355,6 +1370,254 @@ print_footer() {
   echo ""
   echo -e "  📋 $(t "Fuld log" "Full log"): ${BOLD}${LOG_FILE}${NC}"
   echo ""
+}
+
+# ─── Side window ──────────────────────────────────────────────────────────────
+# An interactive run opens a small second window with a checklist of the
+# eight steps. The main window is unchanged. The run writes its progress to a
+# file; the window is this script started with --side-window as the desktop
+# user (never as root) and only draws that file. It closes by itself when the
+# run ends, however the main window is closed.
+
+#######################################
+# Writes the progress for the side window as "key=value" lines, replaced in
+# one step so the window never reads half a file. Does nothing when there is
+# no side window.
+# Globals:
+#   SIDE_FILE, UI_LANG, START_EPOCH, ERRORS, the SIDE_* state (read)
+#######################################
+side_write() {
+  local i tmp
+  [[ -n "${SIDE_FILE:-}" ]] || return 0
+  tmp="${SIDE_FILE}.new"
+  {
+    echo "lang=${UI_LANG}"
+    echo "start=${START_EPOCH}"
+    echo "end=${SIDE_END}"
+    echo "current=${SIDE_CUR}"
+    for (( i = 1; i <= 8; i++ )); do
+      echo "state${i}=${SIDE_STATE[i]}"
+      echo "count${i}=${SIDE_COUNT[i]:-}"
+    done
+    echo "sub=${SIDE_SUB}"
+    echo "stall=${SIDE_STALL}"
+    echo "errors=${ERRORS}"
+  } > "${tmp}" 2>/dev/null && chmod 644 "${tmp}" && mv -f "${tmp}" "${SIDE_FILE}"
+  return 0
+}
+
+#######################################
+# Runs one of the eight steps and keeps the side window up to date: running
+# while it runs, then ok, warning, error or skipped (not installed or
+# switched off), with a count for steps 3-5.
+# Globals:
+#   ERRORS and the report state the steps set (read); the SIDE_* state (set)
+# Arguments:
+#   Step number, the step function.
+#######################################
+side_run() {
+  local n=$1 errors_before=${ERRORS} state=ok
+  shift
+  SIDE_CUR=${n}
+  SIDE_STATE[n]=run
+  side_write
+  "$@"
+  case "${n}" in
+    2) [[ "${SOURCES_COLOR}" == "${YELLOW}" ]] && state=warn ;;
+    3)
+      (( APT_UPGRADED > 0 )) && SIDE_COUNT[3]=${APT_UPGRADED}
+      (( APT_KEPT > 0 )) && state=warn
+      ;;
+    4)
+      if [[ "${FLATPAK_INSTALLED}" != true ]]; then
+        state=skip
+      else
+        SIDE_COUNT[4]=""
+        (( FP_APP_UPD + FP_RT_UPD > 0 )) && SIDE_COUNT[4]=$(( FP_APP_UPD + FP_RT_UPD ))
+        [[ -n "${FP_SKIPPED}" ]] && state=warn
+      fi
+      ;;
+    5) (( AUTOREMOVED > 0 )) && SIDE_COUNT[5]=${AUTOREMOVED} ;;
+    7) [[ "${FW_RAN}" == true ]] || state=skip ;;
+    8)
+      if [[ "${SUPPORT_CHECKED}" != true ]]; then
+        state=skip
+      elif (( SUPPORT_ENDED > 0 )); then
+        state=warn
+      fi
+      ;;
+  esac
+  (( ERRORS > errors_before )) && state=fail
+  SIDE_STATE[n]=${state}
+  SIDE_SUB=""
+  side_write
+}
+
+#######################################
+# Marks the run as finished in the side window (it then shows the result).
+# Globals:
+#   SIDE_END, SIDE_CUR (set)
+#######################################
+side_finish() {
+  SIDE_END=$(date +%s)
+  SIDE_CUR=8
+  side_write
+}
+
+#######################################
+# Draws the side window from a progress file (see side_write).
+# Globals:
+#   SIDE_WIDTH, the colours (read); UI_LANG (set from the file)
+# Arguments:
+#   Progress file.
+# Outputs:
+#   The window's content on STDOUT, drawn from the top left.
+#######################################
+side_render() {
+  local file=$1 key value i mark colour count now elapsed clock bar filled empty done=0 current
+  local -A s=()
+  local -a lines=() names
+  while IFS='=' read -r key value; do
+    s[${key}]=${value}
+  done < "${file}"
+  UI_LANG=${s[lang]:-en}
+  names=("" "$(t "Reparation" "Repair")" "$(t "Pakkelister" "Package lists")"
+         "$(t "Systemopgradering" "System upgrade")" "Flatpak" "$(t "Oprydning" "Cleanup")"
+         "$(t "Pakke-cache" "Package cache")" "Firmware" "$(t "Sikkerhedsstatus" "Security status")")
+  now=${s[end]:-$(date +%s)}
+  elapsed=$(( now - ${s[start]:-${now}} ))
+  printf -v clock '%d:%02d' $(( elapsed / 60 )) $(( elapsed % 60 ))
+  printf -v bar '%*s' "${SIDE_WIDTH}" ''
+  lines+=("${CYAN}${BOLD}${bar// /═}${NC}"
+          "${CYAN}${BOLD}  $(t "Opdatering" "Update")  │  ${clock}${NC}"
+          "${CYAN}${BOLD}${bar// /═}${NC}")
+  for (( i = 1; i <= 8; i++ )); do
+    case "${s[state${i}]:-}" in
+      ok)   mark="✓"; colour=${GREEN} ;;
+      warn) mark="⚠"; colour=${YELLOW} ;;
+      fail) mark="✗"; colour=${RED} ;;
+      run)  mark="▶"; colour=${CYAN} ;;
+      skip) mark="–"; colour="" ;;
+      *)    mark="·"; colour="" ;;
+    esac
+    case "${s[state${i}]:-}" in ok | warn | fail | skip) done=$(( done + 1 )) ;; esac
+    count=${s[count${i}]:-}
+    lines+=("  ${colour}${mark}${NC} ${i} $(pad_right "${names[i]}" 21)$(printf '%5s' "${count}")")
+    if [[ "${s[state${i}]:-}" == run && -n "${s[sub]:-}" ]]; then
+      lines+=("      ${s[sub]:0:$(( SIDE_WIDTH - 6 ))}")
+    fi
+  done
+  current=${s[current]:-0}
+  (( current < 1 )) && current=1
+  [[ -n "${s[end]:-}" ]] && current=8
+  filled=$(( done * 2 ))
+  printf -v empty '%*s' $(( 16 - filled )) ''
+  printf -v value '%*s' "${filled}" ''
+  lines+=("${bar// /─}"
+          "  [${value// /█}${empty// /░}]  $(t "trin" "step") ${current}/8"
+          "${CYAN}${BOLD}${bar// /═}${NC}")
+  if [[ -n "${s[end]:-}" ]]; then
+    lines+=("")
+    if (( ${s[errors]:-0} > 0 )); then
+      lines+=("${RED}${BOLD}  ⚠ $(t "FÆRDIG — ${s[errors]} fejl (se rapport)" \
+                                     "DONE — ${s[errors]} error(s), see report")${NC}")
+    else
+      lines+=("${GREEN}${BOLD}  ✓ $(t "FÆRDIG — ingen fejl" "DONE — no errors")${NC}")
+    fi
+    lines+=("  $(t "Luk med ENTER i hovedvinduet" "Close: ENTER in main window")")
+  elif [[ "${s[stall]:-0}" == 1 ]]; then
+    lines+=("" "${YELLOW}  ⏸ $(t "Står stille: tryk ESC" "Stuck: press ESC")${NC}"
+            "${YELLOW}    $(t "i hovedvinduet" "in the main window")${NC}")
+  fi
+  printf '\033[H'
+  for value in "${lines[@]}"; do
+    printf '%b\033[K\n' "${value}"
+  done
+  printf '\033[J'
+}
+
+#######################################
+# The side window itself: redraws twice a second until the run's process is
+# gone, then ends, which closes its terminal.
+# Arguments:
+#   Progress file, process id of the run.
+# Returns:
+#   1 when the arguments are not usable.
+#######################################
+side_window_loop() {
+  local file=$1 main_pid=$2
+  [[ -n "${file}" && "${main_pid}" =~ ^[0-9]+$ ]] || return 1
+  export LC_ALL=C.UTF-8
+  printf '\033]0;%s\007\033[?25l\033[2J' "Debian System Updater"
+  trap 'printf "\033[?25h"' EXIT
+  while [[ -d "/proc/${main_pid}" && -r "${file}" ]]; do
+    side_render "${file}"
+    sleep 0.5
+  done
+}
+
+#######################################
+# Opens the side window for an interactive run on a desktop: as the user who
+# started sudo (or pkexec), on their display, in the first terminal found.
+# sudo clears DISPLAY, so it is looked up in the user's login session. Any
+# problem only means there is no side window; the run is not affected.
+# Globals:
+#   AUTO (read); SIDE_DIR, SIDE_FILE (set)
+#######################################
+side_open() {
+  local user=${SUDO_USER:-} uid home disp=${DISPLAY:-} xauth=${XAUTHORITY:-} wl="" s script
+  local -a env_vars cmd viewer
+  SIDE_FILE=""
+  [[ "${AUTO}" != true ]] || return 0
+  if [[ -z "${user}" && -n "${PKEXEC_UID:-}" ]]; then
+    user=$(id -nu "${PKEXEC_UID}" 2>/dev/null)
+  fi
+  [[ -n "${user}" && "${user}" != root ]] || return 0
+  uid=$(id -u "${user}" 2>/dev/null) || return 0
+  home=$(getent passwd "${user}" | cut -d: -f6)
+  if [[ -z "${disp}" ]] && command -v loginctl &> /dev/null; then
+    for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk -v u="${uid}" '$2 == u {print $1}'); do
+      disp=$(loginctl show-session "${s}" -p Display --value 2>/dev/null)
+      [[ -n "${disp}" ]] && break
+    done
+  fi
+  for s in "/run/user/${uid}"/wayland-[0-9]; do
+    if [[ -S "${s}" ]]; then
+      wl=${s##*/}
+      break
+    fi
+  done
+  [[ -n "${disp}" || -n "${wl}" ]] || return 0
+  if [[ -z "${xauth}" && -r "${home}/.Xauthority" ]]; then
+    xauth="${home}/.Xauthority"
+  fi
+  script=$(readlink -f "${BASH_SOURCE[0]}")
+  runuser -u "${user}" -- test -r "${script}" 2> /dev/null || return 0
+  viewer=(bash "${script}" --side-window)
+  if command -v xfce4-terminal &> /dev/null; then
+    cmd=(xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar
+         --geometry=34x20-0+60 "--title=Debian System Updater" -x "${viewer[@]}")
+  elif command -v gnome-terminal &> /dev/null; then
+    cmd=(gnome-terminal --geometry=34x20-0+60 -- "${viewer[@]}")
+  elif command -v konsole &> /dev/null; then
+    cmd=(konsole --hide-menubar --hide-tabbar -e "${viewer[@]}")
+  elif command -v x-terminal-emulator &> /dev/null; then
+    cmd=(x-terminal-emulator -e "${viewer[@]}")
+  else
+    return 0
+  fi
+  SIDE_DIR=$(mktemp -d /tmp/debian-updater-side.XXXXXX) || return 0
+  chmod 755 "${SIDE_DIR}"
+  SIDE_FILE="${SIDE_DIR}/progress"
+  side_write
+  env_vars=(LC_ALL=C.UTF-8 "HOME=${home}" "XDG_RUNTIME_DIR=/run/user/${uid}")
+  [[ -n "${disp}" ]] && env_vars+=("DISPLAY=${disp}")
+  [[ -n "${xauth}" ]] && env_vars+=("XAUTHORITY=${xauth}")
+  [[ -n "${wl}" ]] && env_vars+=("WAYLAND_DISPLAY=${wl}")
+  [[ -S "/run/user/${uid}/bus" ]] && env_vars+=("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus")
+  runuser -u "${user}" -- env "${env_vars[@]}" "${cmd[@]}" "${SIDE_FILE}" "$$" \
+    > /dev/null 2>&1 < /dev/null &
+  return 0
 }
 
 # ─── Settings screen ──────────────────────────────────────────────────────────
@@ -1743,6 +2006,10 @@ finish() {
 }
 
 main() {
+  if [[ "${1:-}" == "--side-window" ]]; then   # internal: the side window (side_open)
+    side_window_loop "${2:-}" "${3:-}"
+    exit $?
+  fi
   detect_language
   parse_options "$@"
   require_root
@@ -1755,16 +2022,18 @@ main() {
   setup_mode
   start_log
   init_counters
+  side_open
   print_header
   check_disk_space
-  step_repair
-  step_update_lists
-  step_full_upgrade
-  step_flatpak
-  step_autoremove
-  step_clean_cache
-  step_firmware
-  step_security_status
+  side_run 1 step_repair
+  side_run 2 step_update_lists
+  side_run 3 step_full_upgrade
+  side_run 4 step_flatpak
+  side_run 5 step_autoremove
+  side_run 6 step_clean_cache
+  side_run 7 step_firmware
+  side_run 8 step_security_status
+  side_finish
   collect_status
   print_report
   print_support_clock

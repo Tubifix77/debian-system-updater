@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.9.0 — 2026-10-11
+
+### Added
+- **Side window.** An interactive run on a desktop opens a small second window, in the same ASCII style, with the eight steps as a checklist: ✓ done, ⚠ warning, ✗ error, – skipped, ▶ running, with counts for the upgrade, Flatpak and cleanup steps, the Flatpak app being updated ("2/5" and its name), the elapsed time and a step bar. A stalled download shows there too. At the end it shows the result ("✓ DONE — no errors" or the number of errors). The main window is unchanged.
+- The side window closes with the main window, whether by ENTER or by closing it with X, and can be closed on its own without affecting the run. It runs as the desktop user, never as root, and only draws a progress file the run writes. The display is looked up in the user's login session, because sudo clears it. Never opened in `--auto` runs or without a desktop; if it cannot open, the run carries on unchanged.
+- Unit tests for the drawing (layout, width, all states, finished and stalled screens), the step states and when the window may open.
+
+---
+
 ## v1.8.0 — 2026-10-11
 
 ### Added

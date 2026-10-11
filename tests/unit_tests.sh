@@ -525,5 +525,94 @@ check "the header line is 3+ wider than the title" \
 check "the report line is 3+ wider than the longest report title" \
   [ "${LINE_WIDTH}" -ge $(( ${#report_title} + 3 )) ]
 
+# ─── Side window ──────────────────────────────────────────────────────────────
+side_fixture() {   # side_fixture FILE LANG END ERRORS STALL STATE1..STATE8 : writes a progress file
+  local file=$1 lang=$2 end=$3 errors=$4 stall=$5 i
+  shift 5
+  {
+    echo "lang=${lang}"
+    echo "start=$(( $(date +%s) - 102 ))"
+    echo "end=${end}"
+    echo "current=4"
+    for (( i = 1; i <= 8; i++ )); do
+      echo "state${i}=$1"
+      shift
+      case "${i}" in 3) echo "count3=4" ;; 4) echo "count4=2/5" ;; *) echo "count${i}=" ;; esac
+    done
+    echo "sub=org.azahar_emu.Azahar"
+    echo "stall=${stall}"
+    echo "errors=${errors}"
+  } > "${file}"
+}
+side_screen() {   # side_screen FILE : the drawn window as plain text lines
+  ( LC_ALL=C.UTF-8; side_render "$1" ) | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'
+}
+widest() {   # widest : the longest line on STDIN, in characters
+  local line max=0
+  while IFS= read -r line; do
+    line=$( LC_ALL=C.UTF-8; printf '%s' "${#line}" )
+    (( line > max )) && max=${line}
+  done
+  echo "${max}"
+}
+side_fixture "${WORK}/side1.txt" da "" 0 0 ok ok warn run wait wait wait wait
+side_screen "${WORK}/side1.txt" > "${WORK}/side1.out"
+check "side window: title with the elapsed time" grep -qE '^  Opdatering  │  1:4[23]$' "${WORK}/side1.out"
+check "side window: running step with progress" grep -qE '^  ▶ 4 Flatpak +2/5$' "${WORK}/side1.out"
+check "side window: the app being updated"  grep -qx '      org.azahar_emu.Azahar' "${WORK}/side1.out"
+check "side window: warning with a count"   grep -qE '^  ⚠ 3 Systemopgradering +4$' "${WORK}/side1.out"
+check "side window: waiting steps"          grep -qE '^  · 8 Sikkerhedsstatus *$' "${WORK}/side1.out"
+check "side window: progress counts finished steps" grep -qx '  \[██████░░░░░░░░░░\]  trin 4/8' "${WORK}/side1.out"
+check "side window: 15 lines while running" eq "$(wc -l < "${WORK}/side1.out")" "15"
+check "side window: fits its 32 columns"    test "$(widest < "${WORK}/side1.out")" -le 32
+side_fixture "${WORK}/side2.txt" da "$(date +%s)" 1 0 ok ok ok ok ok fail skip warn
+side_screen "${WORK}/side2.txt" > "${WORK}/side2.out"
+check "side window: finished with an error" grep -qx '  ⚠ FÆRDIG — 1 fejl (se rapport)' "${WORK}/side2.out"
+check "side window: says how to close"      grep -qx '  Luk med ENTER i hovedvinduet' "${WORK}/side2.out"
+check "side window: error and skipped marks" bash -c "grep -qE '^  ✗ 6 ' '${WORK}/side2.out' && grep -qE '^  – 7 ' '${WORK}/side2.out'"
+check "side window: full bar when finished" grep -qx '  \[████████████████\]  trin 8/8' "${WORK}/side2.out"
+check "side window: finished fits 32 columns" test "$(widest < "${WORK}/side2.out")" -le 32
+side_fixture "${WORK}/side3.txt" en "$(date +%s)" 0 0 ok ok ok ok ok ok ok ok
+check "side window: English, no errors"     grep -qx '  ✓ DONE — no errors' <(side_screen "${WORK}/side3.txt")
+side_fixture "${WORK}/side4.txt" da "" 0 1 ok run wait wait wait wait wait wait
+check "side window: shows a stuck download" grep -qx '  ⏸ Står stille: tryk ESC' <(side_screen "${WORK}/side4.txt")
+
+# shellcheck disable=SC2030,SC2034  # the subshell sets the script's globals on purpose
+side_state() {   # side_state STEP FUNCTION [VAR=value ...] : runs side_run, prints "state count"
+  (
+    local step=$1 func=$2
+    shift 2
+    UI_LANG=da; AUTO=true; init_counters
+    for assignment in "$@"; do
+      eval "${assignment}"
+    done
+    SIDE_FILE="${WORK}/side-state.txt"
+    START_EPOCH=$(date +%s)
+    side_run "${step}" "${func}" > /dev/null 2>&1
+    echo "$(grep "^state${step}=" "${SIDE_FILE}" | cut -d= -f2) $(grep "^count${step}=" "${SIDE_FILE}" | cut -d= -f2)"
+  )
+}
+fake_upgrade() { APT_UPGRADED=4; APT_KEPT=0; }
+fake_kept() { APT_UPGRADED=1; APT_KEPT=2; }
+fake_error() { add_error; }
+nothing() { :; }
+check "side state: upgrade ok with its count" eq "$(side_state 3 fake_upgrade)" "ok 4"
+check "side state: kept-back packages warn"  eq "$(side_state 3 fake_kept)" "warn 1"
+check "side state: an error marks the step"  eq "$(side_state 6 fake_error)" "fail "
+check "side state: no Flatpak is skipped"    eq "$(side_state 4 nothing FLATPAK_INSTALLED=false)" "skip "
+check "side state: a skipped app warns"      eq "$(side_state 4 nothing FLATPAK_INSTALLED=true FP_SKIPPED=x FP_APP_UPD=1)" "warn 1"
+check "side state: firmware not run is skipped" eq "$(side_state 7 nothing)" "skip "
+check "side state: packages without support warn" eq "$(side_state 8 nothing SUPPORT_CHECKED=true SUPPORT_ENDED=2)" "warn "
+# shellcheck disable=SC2031  # side_open sets SIDE_FILE in this subshell
+check "side open: never in --auto runs"     eq "$(AUTO=true; side_open; echo "[${SIDE_FILE}]")" "[]"
+# shellcheck disable=SC2031,SC2034  # side_open reads these in this subshell
+check "side open: not without a desktop user" eq "$(AUTO=false SUDO_USER="" PKEXEC_UID=""; side_open; echo "[${SIDE_FILE}]")" "[]"
+sleep 1 &
+side_pid=$!
+start=${SECONDS}
+( side_window_loop "${WORK}/side1.txt" "${side_pid}" ) > /dev/null
+check "side window: closes when the run ends" test $(( SECONDS - start )) -le 3
+check "side window: refuses bad arguments"  bash -c "$(declare -f side_window_loop); ! side_window_loop '' x"
+
 echo "== ${PASSES} passed, ${FAILS} failed, ${SKIPS} skipped"
 (( FAILS == 0 ))

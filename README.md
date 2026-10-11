@@ -121,6 +121,32 @@ The dates in the table above come from `distro-info-data`, [debian.org/releases]
 8. **Security status** — installs `debian-security-support` once (unless `INSTALL_SECURITY_SUPPORT=no`) and shows which installed packages have lost or have limited security support
 9. **Report** — everything above on one screen, the support clock, a restart notice and the path to the log; then ENTER exits and TAB opens the [settings screen](#settings)
 
+### The side window
+
+An interactive run on a desktop also opens a small second window with the steps as a checklist, so you can see at a glance where the run is while the main window shows the full output as before:
+
+```
+════════════════════════════════
+  Update  │  1:42
+════════════════════════════════
+  ✓ 1 Repair
+  ✓ 2 Package lists
+  ✓ 3 System upgrade           4
+  ▶ 4 Flatpak                2/5
+      org.azahar_emu.Azahar
+  · 5 Cleanup
+  · 6 Package cache
+  · 7 Firmware
+  · 8 Security status
+────────────────────────────────
+  [██████░░░░░░░░░░]  step 4/8
+════════════════════════════════
+```
+
+✓ done, ⚠ done with a warning, ✗ error, – skipped (not installed or switched off), ▶ running. When the run is finished, the window says so ("✓ DONE — no errors", or how many errors there were) and it closes together with the main window, whether you press ENTER or close it with X. You can also close the side window on its own at any time; the run does not depend on it.
+
+The window runs as the desktop user, not as root, and only draws a progress file the run writes. It uses `xfce4-terminal`, GNOME Terminal, Konsole or Debian's default terminal, whichever is found first. It is never opened in `--auto` runs or without a desktop (for example over SSH). If it cannot open, the run carries on as normal.
+
 ### A download that hangs
 
 A download that stalls halfway can make a step wait for ever without any error. When a step that only downloads has made no progress for 15 seconds, a line appears:
@@ -175,7 +201,7 @@ It opens like a small editor in the terminal:
 
 ```
 ═════════════════════════════════════════════════════════
-  Settings  │  Debian System Updater v1.8.0
+  Settings  │  Debian System Updater v1.9.0
 ═════════════════════════════════════════════════════════
 
   1  Language                   Automatic (English)
@@ -265,7 +291,7 @@ The script is organised as one function per step with a `main` function, followi
 Every push runs the [CI workflow](.github/workflows/ci.yml):
 
 - **ShellCheck** on all scripts, at every severity.
-- **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the stall detection and ESC skip (also typed into a real terminal), the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
+- **Unit tests** in `tests/unit_tests.sh` for the parsing and decision logic: language detection, options, release and date lookup, the countdown, apt and Flatpak counting, the stall detection and ESC skip (also typed into a real terminal), the side window's drawing and step states, the firmware JSON and Secure Boot logic, security-support parsing and the nightly-updates summary. They load the script's functions without running it, need no root and are safe to run anywhere: `bash tests/unit_tests.sh`.
 - **Integration tests** in `tests/run_tests.sh`, which run the real script in clean Debian 12 and Debian 13 containers in several scenarios, including both languages, all date sources, the warning branches, an unreachable package source, the option handling, and the settings screen typed into a real terminal.
 
 The integration tests change system settings, so they refuse to run anywhere but a throwaway container or VM with `UPDATER_TESTS=1`:
