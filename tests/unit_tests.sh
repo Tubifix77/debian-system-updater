@@ -278,13 +278,13 @@ fi
 cat > "${WORK}/fw.json" <<'EOF'
 {
   "Devices" : [
-    { "Name" : "UEFI CA", "Version" : "2011", "Plugin" : "uefi_db",
+    { "Name" : "UEFI CA", "Version" : "2011", "Plugin" : "uefi_db", "DeviceId" : "id-ca",
       "UpdateError" : "Not enough efivarfs space, requested 16,4 kB and got 239 byte",
       "Releases" : [ { "Version" : "2023" } ] },
-    { "Name" : "UEFI dbx", "Version" : "20250507", "Plugin" : "uefi_dbx",
+    { "Name" : "UEFI dbx", "Version" : "20250507", "Plugin" : "uefi_dbx", "DeviceId" : "id-dbx",
       "UpdateError" : "Not enough efivarfs space, requested 30,7 kB and got 239 byte",
       "Releases" : [ { "Version" : "20260402" }, { "Version" : "20250902" } ] },
-    { "Name" : "NVMe SSD", "Version" : "1.0", "Plugin" : "nvme",
+    { "Name" : "NVMe SSD", "Version" : "1.0", "Plugin" : "nvme", "DeviceId" : "id-nvme",
       "Releases" : [ { "Version" : "1.1" } ] },
     { "Name" : "Mouse", "Version" : "3", "Plugin" : "logitech_hidpp", "Releases" : [] }
   ]
@@ -292,10 +292,10 @@ cat > "${WORK}/fw.json" <<'EOF'
 EOF
 printf '{ "Devices" : [ ] }\n' > "${WORK}/fw-empty.json"
 printf 'not json\n' > "${WORK}/fw-bad.json"
-expected_tsv=$(printf '%s\t%s\t%s\t%s\t%s\n' \
-  "UEFI CA" 2011 2023 "Not enough efivarfs space, requested 16,4 kB and got 239 byte" uefi_db \
-  "UEFI dbx" 20250507 20260402 "Not enough efivarfs space, requested 30,7 kB and got 239 byte" uefi_dbx \
-  "NVMe SSD" 1.0 1.1 "" nvme)
+expected_tsv=$(printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "UEFI CA" 2011 2023 "Not enough efivarfs space, requested 16,4 kB and got 239 byte" uefi_db id-ca \
+  "UEFI dbx" 20250507 20260402 "Not enough efivarfs space, requested 30,7 kB and got 239 byte" uefi_dbx id-dbx \
+  "NVMe SSD" 1.0 1.1 "" nvme id-nvme)
 if command -v python3 > /dev/null 2>&1; then
   check "firmware JSON: one line per device with an update" \
     eq "$(fw_summarise "${WORK}/fw.json")" "${expected_tsv}"
@@ -321,6 +321,38 @@ printf '\x06\x00\x00\x00\x00' > "${WORK}/efi-off/SecureBoot-8be4df61-93ca-11d2-a
 check "Secure Boot on"                      eq "$(secure_boot_state "${WORK}/efi-on")" on
 check "Secure Boot off"                     eq "$(secure_boot_state "${WORK}/efi-off")" off
 check "Secure Boot unknown without EFI"     eq "$(secure_boot_state "${WORK}/efi-none")" unknown
+
+# fw_handle_devices with a stub fwupdmgr that records what it was asked to install
+# shellcheck disable=SC2030,SC2034,SC2317  # the stub and globals are used by fw_handle_devices
+fw_decide() {   # fw_decide EFI-DIR TSV-LINES... : prints "status | installed:<fwupdmgr calls>"
+  local efi=$1
+  shift
+  printf '%s\n' "$@" > "${WORK}/fw-case.tsv"
+  (
+    fwupdmgr() { echo "$*" >> "${WORK}/fw-calls.txt"; echo "Successfully installed firmware"; }
+    UI_LANG=en; AUTO=true; FIRMWARE_UPDATES=install; EFIVARS_DIR=${efi}; TMP=${WORK}; ERRORS=0
+    : > "${WORK}/fw-calls.txt"
+    fw_handle_devices "${WORK}/fw-case.tsv" -y > /dev/null 2>&1
+    echo "${FIRMWARE_STATUS} | installed:$(tr '\n' ';' < "${WORK}/fw-calls.txt")"
+  )
+}
+tab=$'\t'
+sb_ca="UEFI CA${tab}2011${tab}2023${tab}${tab}uefi_db${tab}id-ca"
+sb_dbx="UEFI dbx${tab}20250507${tab}20260402${tab}${tab}uefi_dbx${tab}id-dbx"
+sb_ca_full="UEFI CA${tab}2011${tab}2023${tab}Not enough efivarfs space${tab}uefi_db${tab}id-ca"
+nvme="NVMe SSD${tab}1.0${tab}1.1${tab}${tab}nvme${tab}id-nvme"
+check "firmware: Secure Boot lists alone are not offered with Secure Boot off" \
+  eq "$(fw_decide "${WORK}/efi-off" "${sb_ca}" "${sb_dbx}")" \
+     "none relevant (only Secure Boot lists, and Secure Boot is off) | installed:"
+check "firmware: same when the lists are rejected" \
+  eq "$(fw_decide "${WORK}/efi-off" "${sb_ca_full}" "${sb_dbx}")" \
+     "none relevant (only Secure Boot lists, and Secure Boot is off) | installed:"
+check "firmware: only the real firmware is installed next to the lists" \
+  eq "$(fw_decide "${WORK}/efi-off" "${sb_ca}" "${nvme}")" \
+     "1 device(s) updated (see log) | installed:update -y --no-reboot-check id-nvme;"
+check "firmware: with Secure Boot on the lists are installed too" \
+  eq "$(fw_decide "${WORK}/efi-on" "${sb_ca}" "${nvme}")" \
+     "2 device(s) updated (see log) | installed:update -y --no-reboot-check;"
 
 # ─── Security support ─────────────────────────────────────────────────────────
 cat > "${WORK}/support.txt" <<'EOF'
@@ -406,6 +438,7 @@ check "settings_write: each managed setting written once" \
   eq "$(grep -cE '^(UI_LANG|FIRMWARE_UPDATES|INSTALL_SECURITY_SUPPORT|LTS_WARN_DAYS|LTS_ALARM_DAYS|LTS_END_NOTE)=' "${settings_file}")" 6
 check "settings_write: the old reminder is gone" eq "$(grep -c 'old note' "${settings_file}")" 0
 check "settings_write: readable by all, writable by the owner" eq "$(stat -c %a "${settings_file}")" 644
+# shellcheck disable=SC2031  # the values come from the sourced file, in this subshell
 loaded=$( # shellcheck source=/dev/null
   . "${settings_file}"; echo "${UI_LANG}|${FIRMWARE_UPDATES}|${INSTALL_SECURITY_SUPPORT}|${LTS_WARN_DAYS}|${LTS_ALARM_DAYS}")
 check "settings_write: the file loads back with the same values" eq "${loaded}" "en|check|no|60|14"

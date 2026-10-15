@@ -38,7 +38,7 @@ A real report from a Debian 12 laptop:
   Packages on hold:                1 — heroic
   Flatpak apps updated:            0  (new: 0, removed: 0)
   Flatpak runtimes updated:        0  (new: 0, removed: 0)
-  Firmware:                        none relevant (Secure Boot lists cannot be updated, and Secure Boot is off)
+  Firmware:                        none relevant (only Secure Boot lists, and Secure Boot is off)
   Security support:                2 WITHOUT support (intel-mediasdk mbedtls), 7 limited
   Automatic updates:               active — 11 nightly runs / 21 packages in this month's log, last 2026-09-26
   Free disk space:                 24G
@@ -96,6 +96,22 @@ Or download `update_system.sh` from the [latest release](https://github.com/Tubi
 ```bash
 sudo apt-get install fwupd
 ```
+
+### Desktop icon
+
+To run it with one click, save this as `Update_System.desktop` on your desktop (change `/home/YOU/` to where the script is) and allow it to be launched when the desktop asks:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Update System
+Comment=Full system update and cleanup
+Icon=system-software-update
+Terminal=false
+Exec=xfce4-terminal --icon=system-software-update "--title=Update System" -x sudo /home/YOU/update_system.sh
+```
+
+Starting `xfce4-terminal` directly gives the update window the same icon as the launcher, and the side window uses it too. On a desktop without `xfce4-terminal`, use `Terminal=true` and `Exec=sudo /home/YOU/update_system.sh`; the window then has the terminal's own icon.
 
 ## Supported releases
 
@@ -201,7 +217,7 @@ It opens like a small editor in the terminal:
 
 ```
 ═════════════════════════════════════════════════════════
-  Settings  │  Debian System Updater v1.9.0
+  Settings  │  Debian System Updater v1.9.1
 ═════════════════════════════════════════════════════════
 
   1  Language                   Automatic (English)
@@ -254,7 +270,7 @@ FIRMWARE_UPDATES=check        # ask, install, check or off (default ask)
 - **Packages kept back** — packages apt wanted to upgrade but was not allowed to (usually because they are on hold). They get no security fixes either, so this should normally be 0.
 - **Packages on hold** — everything `apt-mark showhold` lists.
 - **Flatpak skipped** — only shown when you pressed ESC during step 4 ([why](#a-download-that-hangs)). Not an error: the update is simply tried again on the next run. A skipped package-list download shows in yellow under **Package sources**.
-- **Firmware** — one line per device with the current and the new version. "cannot be updated" means fwupd found something on LVFS, but the machine's firmware rejected it; fwupd's reason is shown (on older machines usually too little space in the UEFI variable store). If only the Secure Boot lists (db/dbx) are rejected and Secure Boot is off, this does not matter and shows as "none relevant". If Secure Boot is on, you get a warning.
+- **Firmware** — one line per device with the current and the new version. "cannot be updated" means fwupd found something on LVFS, but the machine's firmware rejected it; fwupd's reason is shown (on older machines usually too little space in the UEFI variable store). While Secure Boot is off, the Secure Boot lists (db/dbx) are ignored by the firmware, so updates to them are never offered for installation; if they are the only updates, the line says "none relevant". If Secure Boot is on, they are offered like other firmware, and a rejected one gives a warning.
 - **Security support** — from `check-support-status`. "WITHOUT support" is serious: remove the package if you don't use it. "limited" is for information (typically "only for trusted content").
 - **Automatic updates** — whether `unattended-upgrades` runs at night. If it does, it is normal that a manual run finds few or no Debian updates: they are already installed.
 

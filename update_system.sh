@@ -20,7 +20,7 @@
 # the final report. Function-local variables are lower case.
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-readonly UPDATER_VERSION="1.9.0"
+readonly UPDATER_VERSION="1.9.1"
 readonly CONFIG_FILE="/etc/default/debian-system-updater"
 readonly LINE_WIDTH=57   # the longest title ends at column 54; 3 characters of margin
 readonly SIDE_WIDTH=32   # inner width of the side window (it opens 34 columns wide)
@@ -59,6 +59,7 @@ DISTRO_INFO_CSV="/usr/share/distro-info/debian.csv"   # Debian's release dates
 # The terminal the settings screen uses when opened at the end of a run, so its
 # screens stay out of the log (the tests point it elsewhere)
 TTY_DEVICE=/dev/tty
+EFIVARS_DIR=/sys/firmware/efi/efivars   # where the Secure Boot state is read (tests: a fake)
 
 # A skippable step counts as stuck when its processes read and write less than
 # STALL_BYTES in STALL_SECONDS; then the ESC hint appears (the tests shorten it)
@@ -797,8 +798,8 @@ step_clean_cache() {
 # Arguments:
 #   JSON file.
 # Outputs:
-#   "name<TAB>current version<TAB>new version<TAB>rejection reason<TAB>plugin"
-#   lines on STDOUT.
+#   "name<TAB>current version<TAB>new version<TAB>rejection reason<TAB>plugin
+#   <TAB>device id" lines on STDOUT.
 # Returns:
 #   Non-zero when python3 fails or the JSON cannot be read.
 #######################################
@@ -815,7 +816,7 @@ for device in data.get("Devices", []):
     releases = device.get("Releases") or []
     if releases:
         fields = (device.get("Name"), device.get("Version"), releases[0].get("Version"),
-                  device.get("UpdateError"), device.get("Plugin"))
+                  device.get("UpdateError"), device.get("Plugin"), device.get("DeviceId"))
         print("\t".join(clean(field) for field in fields))
 PYEOF
 }
@@ -844,7 +845,7 @@ secure_boot_state() {
 # Counts the devices in a firmware summary (see fw_summarise). The Secure Boot
 # lists are the devices of fwupd's uefi_db, uefi_dbx, uefi_kek and uefi_pk plugins.
 # Globals:
-#   FW_DEVICES, FW_BLOCKED, FW_BLOCKED_SB, FW_READY, FW_REASON (set)
+#   FW_DEVICES, FW_BLOCKED, FW_BLOCKED_SB, FW_READY, FW_READY_SB, FW_REASON (set)
 # Arguments:
 #   Summary file.
 #######################################
@@ -854,6 +855,7 @@ fw_count_devices() {
   FW_BLOCKED=$(awk -F'\t' '$4 != ""' "${tsv}" | wc -l)
   FW_BLOCKED_SB=$(awk -F'\t' '$4 != "" && $5 ~ /^uefi_(db|dbx|kek|pk)$/' "${tsv}" | wc -l)
   FW_READY=$(( FW_DEVICES - FW_BLOCKED ))
+  FW_READY_SB=$(awk -F'\t' '$4 == "" && $5 ~ /^uefi_(db|dbx|kek|pk)$/' "${tsv}" | wc -l)
   FW_REASON=$(awk -F'\t' '$4 != "" {print $4}' "${tsv}" | sed 's/,.*//' | sort -u | paste -sd ';')
 }
 
@@ -863,42 +865,67 @@ fw_count_devices() {
 # to the Secure Boot lists mean nothing while Secure Boot is off, and on older
 # machines they often cannot be installed (too little space in the UEFI store).
 # Globals:
-#   AUTO, FIRMWARE_UPDATES, TMP (read); FIRMWARE_STATUS, FW_REBOOT, ERRORS (set)
+#   AUTO, FIRMWARE_UPDATES, TMP, EFIVARS_DIR (read); FIRMWARE_STATUS,
+#   FW_REBOOT, ERRORS (set)
 # Arguments:
 #   Summary file (see fw_summarise), fwupdmgr flags.
 #######################################
 fw_handle_devices() {
   local tsv=$1
   shift
-  local flags=("$@") sb_state install=false answer rc blocked_note
-  sb_state=$(secure_boot_state /sys/firmware/efi/efivars)
+  local flags=("$@") sb_state install=false answer rc=0 blocked_note ready sb_off=false id
+  local -a ids=()
+  sb_state=$(secure_boot_state "${EFIVARS_DIR}")
+  [[ "${sb_state}" == "off" ]] && sb_off=true
   fw_count_devices "${tsv}"
-  awk -F'\t' -v rej="$(t "afvist af firmwaren" "rejected by the firmware")" '
+  awk -F'\t' -v sb_off="${sb_off}" \
+      -v rej="$(t "afvist af firmwaren" "rejected by the firmware")" \
+      -v irrelevant="$(t "ikke relevant: Secure Boot er slået fra" "not relevant: Secure Boot is off")" '
     { line = "  • " $1 ": " ($2 == "" ? "?" : $2) " → " ($3 == "" ? "?" : $3)
       if ($4 != "") line = line "  (" rej ": " $4 ")"
+      else if (sb_off == "true" && $5 ~ /^uefi_(db|dbx|kek|pk)$/) line = line "  (" irrelevant ")"
       print line }' "${tsv}"
+  # With Secure Boot off the firmware ignores its lists, so writing them to the
+  # UEFI store (risky on old machines) is never offered
+  ready=${FW_READY}
+  if [[ "${sb_off}" == true ]]; then
+    ready=$(( FW_READY - FW_READY_SB ))
+  fi
   FIRMWARE_STATUS=""
-  if (( FW_READY > 0 )); then
+  if (( ready > 0 )); then
     case "${FIRMWARE_UPDATES}" in
       install) install=true ;;
       ask)
         if [[ "${AUTO}" != true && -t 0 ]]; then
-          read -r -p "$(t "Installér ${FW_READY} firmware-opdatering(er) nu? [j/N] " \
-                          "Install ${FW_READY} firmware update(s) now? [y/N] ")" answer
+          read -r -p "$(t "Installér ${ready} firmware-opdatering(er) nu? [j/N] " \
+                          "Install ${ready} firmware update(s) now? [y/N] ")" answer
           case "${answer}" in [jJyY]*) install=true ;; esac
         fi
         ;;
     esac
     if [[ "${install}" == true ]]; then
-      fwupdmgr update "${flags[@]}" --no-reboot-check 2>&1 | tee "${TMP}/fw_update.txt"
-      rc=${PIPESTATUS[0]}
+      if (( ready == FW_READY )); then
+        fwupdmgr update "${flags[@]}" --no-reboot-check 2>&1 | tee "${TMP}/fw_update.txt"
+        rc=${PIPESTATUS[0]}
+      else
+        # Only the real firmware, one device at a time, so no Secure Boot list goes along
+        mapfile -t ids < <(awk -F'\t' '$4 == "" && $5 !~ /^uefi_(db|dbx|kek|pk)$/ {print $6}' "${tsv}")
+        : > "${TMP}/fw_update.txt"
+        for id in "${ids[@]}"; do
+          fwupdmgr update "${flags[@]}" --no-reboot-check "${id}" 2>&1 | tee -a "${TMP}/fw_update.txt"
+          answer=${PIPESTATUS[0]}
+          if (( answer != 0 && answer != 2 )); then
+            rc=${answer}
+          fi
+        done
+      fi
       if grep -q 'Successfully installed firmware' "${TMP}/fw_update.txt"; then
-        FIRMWARE_STATUS=$(t "${FW_READY} enhed(er) opdateret — se log" "${FW_READY} device(s) updated (see log)")
+        FIRMWARE_STATUS=$(t "${ready} enhed(er) opdateret — se log" "${ready} device(s) updated (see log)")
         ok "$(t "Firmware opdateret" "Firmware updated")"
         FW_REBOOT=true
       elif (( rc == 0 || rc == 2 )); then
-        FIRMWARE_STATUS=$(t "${FW_READY} enhed(er) har opdateringer, men de blev ikke installeret — se log" \
-                            "${FW_READY} device(s) have updates, but they were not installed (see log)")
+        FIRMWARE_STATUS=$(t "${ready} enhed(er) har opdateringer, men de blev ikke installeret — se log" \
+                            "${ready} device(s) have updates, but they were not installed (see log)")
         warn "${FIRMWARE_STATUS}"
       else
         FIRMWARE_STATUS=$(t "FEJL ved opdatering (kode ${rc})" "ERROR during update (code ${rc})")
@@ -906,19 +933,23 @@ fw_handle_devices() {
         add_error
       fi
     else
-      FIRMWARE_STATUS=$(t "${FW_READY} enhed(er) kan opdateres — installér med: sudo fwupdmgr update" \
-                          "${FW_READY} device(s) can be updated — install with: sudo fwupdmgr update")
+      FIRMWARE_STATUS=$(t "${ready} enhed(er) kan opdateres — installér med: sudo fwupdmgr update" \
+                          "${ready} device(s) can be updated — install with: sudo fwupdmgr update")
       warn "${FIRMWARE_STATUS}"
     fi
   fi
-  if (( FW_BLOCKED > 0 )); then
-    if (( FW_BLOCKED_SB == FW_BLOCKED )) && [[ "${sb_state}" == "off" ]]; then
-      blocked_note=$(t "ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)" \
-                       "none relevant (Secure Boot lists cannot be updated, and Secure Boot is off)")
-      t "  Secure Boot er slået fra på denne maskine, så de manglende db/dbx-opdateringer er uden betydning." \
-        "  Secure Boot is off on this machine, so the missing db/dbx updates do not matter."
-      echo
-      ok "$(t "Firmware tjekket" "Firmware checked")"
+  if (( ready == 0 && FW_BLOCKED == FW_BLOCKED_SB )) && [[ "${sb_off}" == true ]]; then
+    # Nothing but Secure Boot lists, accepted or rejected: none of it matters
+    FIRMWARE_STATUS=$(t "ingen relevante (kun Secure Boot-lister, og Secure Boot er slået fra)" \
+                        "none relevant (only Secure Boot lists, and Secure Boot is off)")
+    t "  Secure Boot er slået fra på denne maskine, så opdateringer af db/dbx-listerne er uden betydning." \
+      "  Secure Boot is off on this machine, so updates to the db/dbx lists do not matter."
+    echo
+    ok "$(t "Firmware tjekket" "Firmware checked")"
+  elif (( FW_BLOCKED > 0 )); then
+    if (( FW_BLOCKED_SB == FW_BLOCKED )) && [[ "${sb_off}" == true ]]; then
+      blocked_note=$(t "Secure Boot-listerne er ikke relevante (Secure Boot er slået fra)" \
+                       "the Secure Boot lists are not relevant (Secure Boot is off)")
     else
       blocked_note=$(t "${FW_BLOCKED} enhed(er) kan ikke opdateres: ${FW_REASON:-se log}" \
                        "${FW_BLOCKED} device(s) cannot be updated: ${FW_REASON:-see log}")
@@ -1596,7 +1627,8 @@ side_open() {
   viewer=(bash "${script}" --side-window)
   if command -v xfce4-terminal &> /dev/null; then
     cmd=(xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar
-         --geometry=34x20-0+60 "--title=Debian System Updater" -x "${viewer[@]}")
+         --icon=system-software-update --geometry=34x20-0+60 "--title=Debian System Updater"
+         -x "${viewer[@]}")
   elif command -v gnome-terminal &> /dev/null; then
     cmd=(gnome-terminal --geometry=34x20-0+60 -- "${viewer[@]}")
   elif command -v konsole &> /dev/null; then

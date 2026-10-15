@@ -38,7 +38,7 @@ En rigtig rapport fra en Debian 12-bærbar:
   Fastholdte pakker (hold):        1 — heroic
   Flatpak-apps opdateret:          0  (nye: 0, fjernet: 0)
   Flatpak-runtimes opdateret:      0  (nye: 0, fjernet: 0)
-  Firmware:                        ingen relevante (Secure Boot-lister kan ikke opdateres, og Secure Boot er slået fra)
+  Firmware:                        ingen relevante (kun Secure Boot-lister, og Secure Boot er slået fra)
   Sikkerhedssupport:               2 UDEN support (intel-mediasdk mbedtls), 7 med begrænset
   Automatiske opdateringer:        aktiv — 11 natlige kørsler / 21 pakker i denne måneds log, senest 2026-09-26
   Diskplads ledig:                 24G
@@ -96,6 +96,22 @@ Eller hent `update_system.sh` fra den [nyeste udgivelse](https://github.com/Tubi
 ```bash
 sudo apt-get install fwupd
 ```
+
+### Ikon på skrivebordet
+
+For at køre det med ét klik, gem dette som `Opdater_System.desktop` på skrivebordet (ret `/home/DIG/` til der, hvor scriptet ligger), og tillad at det startes, når skrivebordet spørger:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Opdater System
+Comment=Fuld systemopdatering og oprydning
+Icon=system-software-update
+Terminal=false
+Exec=xfce4-terminal --icon=system-software-update "--title=Opdater System" -x sudo /home/DIG/update_system.sh
+```
+
+Når `xfce4-terminal` startes direkte, får opdateringsvinduet samme ikon som genvejen, og sidevinduet bruger det også. På et skrivebord uden `xfce4-terminal` bruges `Terminal=true` og `Exec=sudo /home/DIG/update_system.sh`; vinduet har så terminalens eget ikon.
 
 ## Understøttede udgaver
 
@@ -201,7 +217,7 @@ Den åbner som en lille editor i terminalen:
 
 ```
 ═════════════════════════════════════════════════════════
-  Indstillinger  │  Debian System Updater v1.9.0
+  Indstillinger  │  Debian System Updater v1.9.1
 ═════════════════════════════════════════════════════════
 
   1  Sprog                      Automatisk (dansk)
@@ -253,7 +269,7 @@ FIRMWARE_UPDATES=check        # ask, install, check eller off (standard ask)
 
 - **Pakker holdt tilbage** — pakker apt ville opgradere, men ikke måtte (typisk fordi de er sat på hold). De får heller ikke sikkerhedsrettelser, så tallet bør normalt være 0.
 - **Fastholdte pakker (hold)** — alt hvad `apt-mark showhold` viser.
-- **Firmware** — én linje pr. enhed med nuværende og ny version. "kan ikke opdateres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det; fwupd's begrundelse står med (typisk for lidt plads i UEFI-variabellageret på ældre maskiner). Er det kun Secure Boot-listerne (db/dbx), der afvises, og Secure Boot er slået fra, er det uden betydning og vises som "ingen relevante". Er Secure Boot slået til, får du en advarsel.
+- **Firmware** — én linje pr. enhed med nuværende og ny version. "kan ikke opdateres" betyder, at fwupd fandt noget på LVFS, men maskinens firmware afviste det; fwupd's begrundelse står med (typisk for lidt plads i UEFI-variabellageret på ældre maskiner). Mens Secure Boot er slået fra, ignorerer firmwaren Secure Boot-listerne (db/dbx), så opdateringer af dem tilbydes aldrig til installation; er de de eneste opdateringer, står der "ingen relevante". Er Secure Boot slået til, tilbydes de som anden firmware, og en afvist giver en advarsel.
 - **Flatpak sprunget over** — vises kun, når du har trykket ESC i trin 4 ([hvorfor](#en-download-der-hænger)). Ikke en fejl: opdateringen prøves bare igen ved næste kørsel. Er pakkelisterne sprunget over, står det med gult under **Pakkekilder**.
 - **Sikkerhedssupport** — fra `check-support-status`. "UDEN support" er alvorligt: fjern pakken, hvis du ikke bruger den. "Begrænset" er til orientering (typisk "kun til betroet indhold").
 - **Automatiske opdateringer** — om `unattended-upgrades` kører om natten. Gør den det, er det normalt, at en manuel kørsel finder få eller ingen Debian-opdateringer: de er allerede installeret.

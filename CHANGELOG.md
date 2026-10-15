@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.9.1 — 2026-10-15
+
+### Fixed
+- **No more firmware question about Secure Boot lists while Secure Boot is off.** fwupd offers updates to the Secure Boot lists (UEFI CA, dbx). On a machine whose UEFI store was full they were rejected, and the report said "none relevant"; once the store had room again, the run asked "Install 2 firmware updates now?" for lists the firmware ignores while Secure Boot is off, and writing to the UEFI store of an old machine is not risk-free. Now, with Secure Boot off, these lists are never offered: each is marked "not relevant: Secure Boot is off", and if they are the only updates the report says "none relevant". If real firmware is offered at the same time, only that is installed, one device at a time, so no list goes along. With Secure Boot on, nothing changes.
+
+### Changed
+- The side window has the update icon (`system-software-update`, the standard icon name) instead of the terminal's grey default icon, in `xfce4-terminal`.
+- README (English and Danish): a "Desktop icon" section with a ready-made launcher that starts `xfce4-terminal` with the same icon, so the main window gets it too.
+
+---
+
 ## v1.9.0 — 2026-10-11
 
 ### Added
